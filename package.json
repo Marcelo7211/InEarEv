@@ -1,0 +1,21 @@
+{
+  "name": "inear-app",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @inear/desktop-server",
+    "build": "npm run build -w @inear/desktop-server",
+    "typecheck": "npm run typecheck -w @inear/protocol && npm run typecheck -w @inear/desktop-server && npm run typecheck -w @inear/mobile",
+    "test": "npm run test -w @inear/protocol",
+    "receiver": "node tools/udp-receiver.cjs",
+    "inear:mac:capture-cmd": "node tools/mac-print-capture-cmd.cjs",
+    "dev:mobile": "npm run start -w @inear/mobile -- --lan",
+    "dev:expo": "npm run dev:mobile"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
