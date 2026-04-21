@@ -1,5 +1,8 @@
 package com.inear.android.audio
 
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+
 /**
  * Binary retorno frames (same as [packages/protocol/src/wireFrame.ts]).
  */
@@ -30,14 +33,10 @@ object Ine1Decoder {
         if (length < HEADER_BYTES + payloadBytes) return null
         if (payloadBytes != samplesPerChannel * 2 * 2) return null
         val pcm = ShortArray(samplesPerChannel * 2)
-        var p = offset + HEADER_BYTES
-        var i = 0
-        while (i < pcm.size) {
-            val s = (buf[p].toInt() and 0xff) or (buf[p + 1].toInt() shl 8)
-            pcm[i] = s.toShort()
-            p += 2
-            i++
-        }
+        ByteBuffer.wrap(buf, offset + HEADER_BYTES, payloadBytes)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .asShortBuffer()
+            .get(pcm)
         return Frame(version, flags, sequence, serverTs, samplesPerChannel, pcm)
     }
 

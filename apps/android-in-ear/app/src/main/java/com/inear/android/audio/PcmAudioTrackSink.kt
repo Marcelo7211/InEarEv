@@ -36,8 +36,8 @@ class PcmAudioTrackSink(private val sampleRate: Int = 48_000) {
       val bufBytes = if (lowLatency) minBuf else (minBuf * 2).coerceAtLeast(minBuf / 2)
       maxQueuedFrames = if (lowLatency) 2 else 3
             val attr = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .build()
             val fmt = AudioFormat.Builder()
                 .setSampleRate(sampleRate)
@@ -129,10 +129,25 @@ class PcmAudioTrackSink(private val sampleRate: Int = 48_000) {
       }
       if (next == null || t == null) continue
       var off = 0
+      var stalls = 0
       while (off < next.size) {
         val w = t.write(next, off, next.size - off)
-        if (w <= 0) break
-        off += w
+        when {
+          w > 0 -> {
+            off += w
+            stalls = 0
+          }
+          w == 0 -> {
+            stalls++
+            if (stalls > 2000) break
+            Thread.sleep(2)
+          }
+          else -> {
+            stalls++
+            if (stalls > 200) break
+            Thread.sleep(5)
+          }
+        }
       }
     }
   }
