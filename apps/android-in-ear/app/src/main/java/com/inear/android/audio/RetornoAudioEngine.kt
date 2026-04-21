@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -22,6 +23,17 @@ import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import org.webrtc.AudioTrack
+import org.webrtc.MediaConstraints
+import org.webrtc.PeerConnection
+import org.webrtc.PeerConnectionFactory
+import org.webrtc.RtpTransceiver
+import org.webrtc.SdpObserver
+import org.webrtc.SessionDescription
+import org.webrtc.audio.JavaAudioDeviceModule
+import com.inear.android.net.InEarRepository
 
 private const val UDP_CONTROL_PORT = 9877
 private const val SAMPLE_RATE = 48_000
@@ -37,7 +49,9 @@ data class RetornoStats(
 )
 
 class RetornoAudioEngine(
+    private val appContext: android.content.Context,
     private val scope: CoroutineScope,
+    private val repository: InEarRepository = InEarRepository(),
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .pingInterval(25, TimeUnit.SECONDS)
@@ -51,6 +65,7 @@ class RetornoAudioEngine(
     private var udpSocket: DatagramSocket? = null
     private var ws: WebSocket? = null
     private var recvThread: Thread? = null
+    private var pc: PeerConnection? = null
 
     @Volatile
     private var running = false
@@ -66,6 +81,7 @@ class RetornoAudioEngine(
             lastSeq = null
             _stats.value = RetornoStats(transport = "starting", connected = false, playing = false)
             try {
+                if (tryWebRtc(apiBase, token, latency)) return@launch
                 val host = URL(apiBase.trim().trimEnd('/')).host
                 if (tryUdp(host, token, latency)) return@launch
                 tryWebSocket(apiBase, token, latency)
@@ -100,8 +116,86 @@ class RetornoAudioEngine(
         } catch (_: Exception) {
         }
         ws = null
+        try {
+            pc?.close()
+        } catch (_: Exception) {
+        }
+        pc = null
         sink.stop()
         _stats.value = RetornoStats()
+    }
+
+    private suspend fun tryWebRtc(apiBase: String, token: String, latency: String): Boolean {
+        if (!ensureWebRtcFactory(appContext)) return false
+        val pcFactory = sharedPcFactory ?: return false
+        val rtcConfig = PeerConnection.RTCConfiguration(emptyList()).apply {
+            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+        }
+        var gotAudioTrack = false
+        val peer = pcFactory.createPeerConnection(
+            rtcConfig,
+            object : PeerConnection.Observer {
+                override fun onSignalingChange(newState: PeerConnection.SignalingState) {}
+                override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState) {
+                    if (newState == PeerConnection.IceConnectionState.FAILED) {
+                        _stats.update { it.copy(lastError = "webrtc ice failed", connected = false) }
+                    }
+                }
+                override fun onIceConnectionReceivingChange(receiving: Boolean) {}
+                override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState) {}
+                override fun onIceCandidate(candidate: org.webrtc.IceCandidate) {}
+                override fun onIceCandidatesRemoved(candidates: Array<out org.webrtc.IceCandidate>) {}
+                override fun onAddStream(stream: org.webrtc.MediaStream) {}
+                override fun onRemoveStream(stream: org.webrtc.MediaStream) {}
+                override fun onDataChannel(dc: org.webrtc.DataChannel) {}
+                override fun onRenegotiationNeeded() {}
+                override fun onAddTrack(receiver: org.webrtc.RtpReceiver, streams: Array<out org.webrtc.MediaStream>) {
+                    val track = receiver.track()
+                    if (track is AudioTrack) {
+                        track.setEnabled(true)
+                        gotAudioTrack = true
+                        _stats.update { it.copy(transport = "webrtc", connected = true, playing = true, lastError = null) }
+                    }
+                }
+                override fun onTrack(transceiver: RtpTransceiver) {
+                    val tr = transceiver.receiver.track()
+                    if (tr is AudioTrack) {
+                        tr.setEnabled(true)
+                        gotAudioTrack = true
+                        _stats.update { it.copy(transport = "webrtc", connected = true, playing = true, lastError = null) }
+                    }
+                }
+            },
+        ) ?: return false
+        pc = peer
+        val transInit = RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
+        peer.addTransceiver(org.webrtc.MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO, transInit)
+        val offer = createOffer(peer)
+        setLocal(peer, offer)
+        // LAN: espera breve para coletar candidates host no SDP.
+        kotlinx.coroutines.delay(500)
+        val localSdp = peer.localDescription?.description ?: offer.description
+        val ans = repository.createWebRtcAnswer(apiBase, token, localSdp)
+        if (ans.sdp.isBlank()) {
+            peer.close()
+            pc = null
+            return false
+        }
+        setRemote(peer, SessionDescription(SessionDescription.Type.ANSWER, ans.sdp))
+        val lat = if (latency == "low") "low" else "stable"
+        sink.start(lat)
+        _stats.value = RetornoStats(transport = "webrtc", connected = true, playing = true, queuedFrames = sink.queuedFrames())
+        // Se não houver track em breve, deixa fallback atuar.
+        kotlinx.coroutines.delay(1200)
+        if (!gotAudioTrack) {
+            try {
+                peer.close()
+            } catch (_: Exception) {}
+            pc = null
+            _stats.update { it.copy(connected = false, playing = false, lastError = "webrtc sem track de audio") }
+            return false
+        }
+        return true
     }
 
     private fun tryUdp(host: String, token: String, latency: String): Boolean {
@@ -237,5 +331,57 @@ class RetornoAudioEngine(
 
     fun setMasterGain(g: Float) {
         sink.setMaster(g)
+    }
+
+    private suspend fun createOffer(peer: PeerConnection): SessionDescription =
+        suspendCancellableCoroutine { cont ->
+            peer.createOffer(object : SdpObserver {
+                override fun onCreateSuccess(desc: SessionDescription?) {
+                    if (desc != null) cont.resume(desc) else cont.resumeWithException(IllegalStateException("offer vazio"))
+                }
+                override fun onCreateFailure(err: String?) { cont.resumeWithException(IllegalStateException(err ?: "offer failure")) }
+                override fun onSetSuccess() {}
+                override fun onSetFailure(err: String?) {}
+            }, MediaConstraints())
+        }
+
+    private suspend fun setLocal(peer: PeerConnection, desc: SessionDescription): Unit =
+        suspendCancellableCoroutine { cont ->
+            peer.setLocalDescription(object : SdpObserver {
+                override fun onSetSuccess() { cont.resume(Unit) }
+                override fun onSetFailure(err: String?) { cont.resumeWithException(IllegalStateException(err ?: "setLocal failure")) }
+                override fun onCreateSuccess(desc: SessionDescription?) {}
+                override fun onCreateFailure(err: String?) {}
+            }, desc)
+        }
+
+    private suspend fun setRemote(peer: PeerConnection, desc: SessionDescription): Unit =
+        suspendCancellableCoroutine { cont ->
+            peer.setRemoteDescription(object : SdpObserver {
+                override fun onSetSuccess() { cont.resume(Unit) }
+                override fun onSetFailure(err: String?) { cont.resumeWithException(IllegalStateException(err ?: "setRemote failure")) }
+                override fun onCreateSuccess(desc: SessionDescription?) {}
+                override fun onCreateFailure(err: String?) {}
+            }, desc)
+        }
+
+    companion object {
+        @Volatile private var factoryReady = false
+        @Volatile private var sharedPcFactory: PeerConnectionFactory? = null
+        private fun ensureWebRtcFactory(app: android.content.Context): Boolean {
+            if (factoryReady && sharedPcFactory != null) return true
+            return try {
+                val initOptions = PeerConnectionFactory.InitializationOptions.builder(app).createInitializationOptions()
+                PeerConnectionFactory.initialize(initOptions)
+                val adm = JavaAudioDeviceModule.builder(app).createAudioDeviceModule()
+                sharedPcFactory = PeerConnectionFactory.builder()
+                    .setAudioDeviceModule(adm)
+                    .createPeerConnectionFactory()
+                factoryReady = sharedPcFactory != null
+                factoryReady
+            } catch (_: Exception) {
+                false
+            }
+        }
     }
 }

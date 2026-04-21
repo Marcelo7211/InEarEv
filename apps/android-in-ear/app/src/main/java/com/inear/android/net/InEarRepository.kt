@@ -135,4 +135,25 @@ class InEarRepository(
             }
         }
     }
+
+    suspend fun createWebRtcAnswer(apiBase: String, bearer: String, offerSdp: String): WebRtcAnswerResponse {
+        val base = apiBase.trim().trimEnd('/')
+        val body = apiJson.encodeToString(
+            buildJsonObject {
+                put("sdp", offerSdp)
+            },
+        ).toRequestBody(jsonMedia)
+        val req = Request.Builder()
+            .url("$base/api/webrtc/offer")
+            .header("Authorization", "Bearer $bearer")
+            .post(body)
+            .build()
+        return withContext(Dispatchers.IO) {
+            client.newCall(req).execute().use { resp ->
+                val text = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) error("webrtc offer ${resp.code}: $text")
+                apiJson.decodeFromString<WebRtcAnswerResponse>(text)
+            }
+        }
+    }
 }

@@ -96,3 +96,11 @@ data class AudioInputLevelsResponse(
     val receiving: Boolean = false,
     val levelsByIndex: Map<String, Double> = emptyMap(),
 )
+
+@Serializable
+data class WebRtcAnswerResponse(
+    val ok: Boolean = false,
+    val sessionId: String? = null,
+    val type: String = "answer",
+    val sdp: String = "",
+)

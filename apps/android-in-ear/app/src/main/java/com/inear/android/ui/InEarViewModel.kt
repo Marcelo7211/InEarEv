@@ -30,7 +30,7 @@ data class UiSession(
 class InEarViewModel(application: Application) : AndroidViewModel(application) {
     private val sessionStore = SessionDataStore(application)
     val repository = InEarRepository()
-    val audioEngine = RetornoAudioEngine(viewModelScope)
+    val audioEngine = RetornoAudioEngine(application.applicationContext, viewModelScope, repository)
 
     private val _session = MutableStateFlow(UiSession())
     val session: StateFlow<UiSession> = _session.asStateFlow()

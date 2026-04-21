@@ -8,6 +8,8 @@ plugins {
 android {
     namespace = "com.inear.android"
     compileSdk = 35
+    buildToolsVersion = "35.0.0"
+    ndkVersion = "25.2.9519653"
 
     defaultConfig {
         applicationId = "com.inear.android"
@@ -64,6 +66,7 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("org.webrtc:google-webrtc:1.0.32006")
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlin:kotlin-test:2.0.21")
