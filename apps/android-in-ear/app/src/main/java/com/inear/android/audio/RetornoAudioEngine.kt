@@ -1,5 +1,6 @@
 package com.inear.android.audio
 
+import android.media.AudioManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -66,6 +67,9 @@ class RetornoAudioEngine(
     private var ws: WebSocket? = null
     private var recvThread: Thread? = null
     private var pc: PeerConnection? = null
+    private var audioManager: AudioManager? = null
+    private var prevMode: Int? = null
+    private var prevSpeaker: Boolean? = null
 
     @Volatile
     private var running = false
@@ -81,11 +85,10 @@ class RetornoAudioEngine(
             lastSeq = null
             _stats.value = RetornoStats(transport = "starting", connected = false, playing = false)
             try {
+                if (tryWebRtc(apiBase, token, latency)) return@launch
                 val host = URL(apiBase.trim().trimEnd('/')).host
                 if (tryUdp(host, token, latency)) return@launch
                 tryWebSocket(apiBase, token, latency)
-                if (stats.value.playing) return@launch
-                if (tryWebRtc(apiBase, token, latency)) return@launch
             } catch (e: Exception) {
                 _stats.value = RetornoStats(
                     transport = "error",
@@ -122,6 +125,7 @@ class RetornoAudioEngine(
         } catch (_: Exception) {
         }
         pc = null
+        restoreAudioRoute()
         sink.stop()
         _stats.value = RetornoStats()
     }
@@ -154,6 +158,7 @@ class RetornoAudioEngine(
                     val track = receiver.track()
                     if (track is AudioTrack) {
                         track.setEnabled(true)
+                        forceSpeakerRoute()
                         gotAudioTrack = true
                         _stats.update { it.copy(transport = "webrtc", connected = true, playing = true, lastError = null) }
                     }
@@ -162,6 +167,7 @@ class RetornoAudioEngine(
                     val tr = transceiver.receiver.track()
                     if (tr is AudioTrack) {
                         tr.setEnabled(true)
+                        forceSpeakerRoute()
                         gotAudioTrack = true
                         _stats.update { it.copy(transport = "webrtc", connected = true, playing = true, lastError = null) }
                     }
@@ -183,9 +189,8 @@ class RetornoAudioEngine(
             return false
         }
         setRemote(peer, SessionDescription(SessionDescription.Type.ANSWER, ans.sdp))
-        val lat = if (latency == "low") "low" else "stable"
-        sink.start(lat)
-        _stats.value = RetornoStats(transport = "webrtc", connected = true, playing = true, queuedFrames = sink.queuedFrames())
+        forceSpeakerRoute()
+        _stats.value = RetornoStats(transport = "webrtc", connected = true, playing = true, queuedFrames = 0)
         // Se não houver track em breve, deixa fallback atuar.
         kotlinx.coroutines.delay(1200)
         if (!gotAudioTrack) {
@@ -193,6 +198,7 @@ class RetornoAudioEngine(
                 peer.close()
             } catch (_: Exception) {}
             pc = null
+            restoreAudioRoute()
             _stats.update { it.copy(connected = false, playing = false, lastError = "webrtc sem track de audio") }
             return false
         }
@@ -332,6 +338,36 @@ class RetornoAudioEngine(
 
     fun setMasterGain(g: Float) {
         sink.setMaster(g)
+    }
+
+    private fun forceSpeakerRoute() {
+        val mgr = (audioManager ?: appContext.getSystemService(AudioManager::class.java))
+        if (mgr != null) {
+            if (audioManager == null) {
+                audioManager = mgr
+                prevMode = mgr.mode
+                prevSpeaker = mgr.isSpeakerphoneOn
+            }
+            try {
+                mgr.mode = AudioManager.MODE_IN_COMMUNICATION
+                mgr.isSpeakerphoneOn = true
+            } catch (_: Exception) {
+                /* ignore route failures */
+            }
+        }
+    }
+
+    private fun restoreAudioRoute() {
+        val mgr = audioManager ?: return
+        try {
+            if (prevSpeaker != null) mgr.isSpeakerphoneOn = prevSpeaker == true
+            if (prevMode != null) mgr.mode = prevMode ?: AudioManager.MODE_NORMAL
+        } catch (_: Exception) {
+            /* */
+        }
+        audioManager = null
+        prevMode = null
+        prevSpeaker = null
     }
 
     private suspend fun createOffer(peer: PeerConnection): SessionDescription =
