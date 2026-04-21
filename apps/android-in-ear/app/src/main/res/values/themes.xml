@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.InEar" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#0b1118</item>
+        <item name="android:navigationBarColor">#0b1118</item>
+        <item name="android:windowBackground">#05070b</item>
+    </style>
+</resources>

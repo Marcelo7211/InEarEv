@@ -7,7 +7,38 @@
     "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 node scripts/run-electron.cjs\"",
     "build:renderer": "vite build",
     "build": "npm run build:renderer",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dist:win": "node scripts/download-ffmpeg-windows.cjs && npm run build && electron-builder --win nsis portable"
+  },
+  "build": {
+    "appId": "com.inear.desktop",
+    "productName": "inEar Desktop",
+    "directories": {
+      "output": "release"
+    },
+    "extraResources": [
+      {
+        "from": "resources/ffmpeg-win",
+        "to": "ffmpeg-win",
+        "filter": ["ffmpeg.exe", "ffprobe.exe"]
+      }
+    ],
+    "files": [
+      "dist/**/*",
+      "main-process/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "include": "build/installer.nsh"
+    }
   },
   "dependencies": {
     "@inear/protocol": "file:../../packages/protocol",
@@ -30,7 +61,8 @@
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
-    "electron": "^34.0.2",
+    "electron": "34.0.2",
+    "electron-builder": "^24.13.3",
     "typescript": "^5.7.3",
     "vite": "^6.0.11",
     "wait-on": "^8.0.2"

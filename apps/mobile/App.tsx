@@ -20,6 +20,7 @@ import { WebView } from 'react-native-webview'
 import {
   RetornoMixerControls,
   parseJwtSub,
+  type NetworkQualityUi,
 } from './RetornoMixerControls'
 import { RetornoNativeConsole } from './RetornoNativeConsole'
 import { nativeRetornoAudio } from './nativeRetornoAudio'
@@ -64,7 +65,7 @@ function formatApiFieldValue(raw: string): string {
 type PcAudioStatus = {
   configured: boolean
   receiving: boolean
-  audioCaptureSource?: 'env' | 'avfoundation' | 'none'
+  audioCaptureSource?: 'env' | 'avfoundation' | 'dshow' | 'none'
   captureAvfoundationAudioIndex?: number | null
   captureAvfoundationMode?: 'auto' | 'manual' | 'off'
   captureAvfoundationAutoPicked?: boolean
@@ -81,6 +82,8 @@ type CaptureInputMatrix = {
 
 type AudioCaptureDevicesRes = {
   platform: string
+  ffmpegFound?: boolean
+  usingBundledWinFfmpeg?: boolean
   ffprobeFound?: boolean
   devices: {
     index: number
@@ -88,7 +91,7 @@ type AudioCaptureDevicesRes = {
     inputChannels: number | null
     probeError?: string | null
   }[]
-  captureSource: 'env' | 'avfoundation' | 'none'
+  captureSource: 'env' | 'avfoundation' | 'dshow' | 'none'
   captureMode: 'auto' | 'manual' | 'off'
   manualAvfoundationAudioIndex: number | null
   effectiveAvfoundationAudioIndex: number | null
@@ -123,7 +126,7 @@ async function loadPcAudioStatus(
     const j = (await r.json()) as {
       pcAudioCaptureConfigured?: boolean
       pcAudioCaptureReceiving?: boolean
-      audioCaptureSource?: 'env' | 'avfoundation' | 'none'
+      audioCaptureSource?: 'env' | 'avfoundation' | 'dshow' | 'none'
       captureAvfoundationAudioIndex?: number | null
       captureAvfoundationMode?: 'auto' | 'manual' | 'off'
       captureAvfoundationAutoPicked?: boolean
@@ -201,11 +204,12 @@ function PcAudioBanner({ status }: { status: PcAudioStatus | null }) {
     )
   }
   const src = status.audioCaptureSource
-  if (src === 'avfoundation') {
+  if (src === 'avfoundation' || src === 'dshow') {
     const auto = status.captureAvfoundationAutoPicked
+    const label = src === 'dshow' ? 'DirectShow (Windows)' : 'AVFoundation (macOS)'
     return (
       <Text style={styles.okBanner}>
-        Captura AVFoundation ativa
+        Captura {label} ativa
         {auto ? ' (detetada automaticamente)' : ' (modo manual)'}
         {status.captureAvfoundationAudioIndex != null
           ? ` · [${status.captureAvfoundationAudioIndex}]`
@@ -234,10 +238,11 @@ function MacAudioDevicesReadonly({
   if (!data) {
     return <Text style={hint}>A carregar entradas do Mac…</Text>
   }
-  if (data.platform !== 'darwin') {
+  if (data.platform !== 'darwin' && data.platform !== 'win32') {
     return (
       <Text style={hint}>
-        Lista de entradas AVFoundation só quando o servidor corre em macOS.
+        Lista de entradas só quando o servidor corre em macOS (AVFoundation) ou Windows
+        (DirectShow).
       </Text>
     )
   }
@@ -250,7 +255,7 @@ function MacAudioDevicesReadonly({
   }
   const eff = data.effectiveAvfoundationAudioIndex
   let active: string
-  if (data.captureSource === 'avfoundation' && eff != null) {
+  if ((data.captureSource === 'avfoundation' || data.captureSource === 'dshow') && eff != null) {
     active =
       data.effectiveDeviceName != null
         ? `[${eff}] ${data.effectiveDeviceName}`
@@ -392,6 +397,10 @@ export default function App() {
   const retornoWebRef = useRef<WebView>(null)
   const [retornoShowfile, setRetornoShowfile] = useState<Showfile | null>(null)
   const [retornoMasterGain, setRetornoMasterGain] = useState(1)
+  const [networkQuality, setNetworkQuality] = useState<NetworkQualityUi | null>(
+    null,
+  )
+  const mixPollBoostUntil = useRef(0)
 
   const retornoMusician = useMemo(() => {
     if (!retornoShowfile || !session) return null
@@ -438,6 +447,11 @@ export default function App() {
     if (r.ok) setRetornoShowfile((await r.json()) as Showfile)
   }, [normalizedApiBase, session])
 
+  const bumpMixPoll = useCallback(() => {
+    mixPollBoostUntil.current = Date.now() + 6000
+    void refetchRetornoShowfile()
+  }, [refetchRetornoShowfile])
+
   const streamWsUrl = useMemo(() => {
     if (!session || session.role !== 'musician') return null
     try {
@@ -459,10 +473,13 @@ export default function App() {
 
   const retornoHtml = useMemo(
     () =>
-      streamWsUrl
-        ? buildStreamRetornoPlayerHtml(streamWsUrl, retornoLatency)
+      streamWsUrl && session?.token
+        ? buildStreamRetornoPlayerHtml(streamWsUrl, retornoLatency, {
+            apiBase: normalizedApiBase.replace(/\/$/, ''),
+            token: session.token,
+          })
         : '',
-    [streamWsUrl, retornoLatency],
+    [streamWsUrl, retornoLatency, normalizedApiBase, session?.token],
   )
 
   const panelUri = useMemo(() => {
@@ -521,16 +538,21 @@ export default function App() {
           append(
             'Áudio: captura configurada mas sem PCM do ffmpeg — rever terminal do PC.',
           )
-        } else if (audioSt.audioCaptureSource === 'avfoundation') {
+        } else if (
+          audioSt.audioCaptureSource === 'avfoundation' ||
+          audioSt.audioCaptureSource === 'dshow'
+        ) {
+          const srcLabel =
+            audioSt.audioCaptureSource === 'dshow' ? 'DirectShow' : 'AVFoundation'
           append(
-            `Áudio: AVFoundation [${audioSt.captureAvfoundationAudioIndex ?? '?'}] a alimentar o mix.`,
+            `Áudio: ${srcLabel} [${audioSt.captureAvfoundationAudioIndex ?? '?'}] a alimentar o mix.`,
           )
         } else {
           append('Áudio: INEAR_CAPTURE_CMD a alimentar o mix.')
         }
       }
       if (devList?.devices?.length) {
-        append(`Entradas Mac (${devList.devices.length}): ver bloco abaixo.`)
+        append(`Entradas de áudio (${devList.devices.length}): ver bloco abaixo.`)
       }
 
       const sf = await fetch(`${base}/api/showfile`, {
@@ -623,16 +645,63 @@ export default function App() {
     if (!retornoActive || !session || session.role !== 'musician') {
       return
     }
-    const timer = setInterval(() => {
-      void refetchRetornoShowfile()
-    }, retornoHasAllPcmChannels ? 3000 : 1500)
-    return () => clearInterval(timer)
+    let cancelled = false
+    let handle: ReturnType<typeof setTimeout>
+    const schedule = () => {
+      const fast = Date.now() < mixPollBoostUntil.current
+      const delay = fast
+        ? 500
+        : retornoHasAllPcmChannels
+          ? 3000
+          : 1500
+      handle = setTimeout(async () => {
+        if (cancelled) return
+        await refetchRetornoShowfile()
+        schedule()
+      }, delay)
+    }
+    schedule()
+    return () => {
+      cancelled = true
+      clearTimeout(handle)
+    }
   }, [
     refetchRetornoShowfile,
     retornoHasAllPcmChannels,
     retornoActive,
     session,
   ])
+
+  useEffect(() => {
+    if (!retornoActive || !session || session.role !== 'musician') {
+      setNetworkQuality(null)
+      return
+    }
+    const base = normalizedApiBase
+    if (!base.startsWith('http://') && !base.startsWith('https://')) {
+      setNetworkQuality(null)
+      return
+    }
+    let cancelled = false
+    const load = async () => {
+      try {
+        const r = await fetch(`${base}/api/network-quality`, {
+          headers: { Authorization: `Bearer ${session.token}` },
+        })
+        if (!r.ok || cancelled) return
+        const j = (await r.json()) as { self: NetworkQualityUi | null }
+        if (!cancelled) setNetworkQuality(j.self ?? null)
+      } catch {
+        if (!cancelled) setNetworkQuality(null)
+      }
+    }
+    void load()
+    const t = setInterval(load, 3000)
+    return () => {
+      cancelled = true
+      clearInterval(t)
+    }
+  }, [normalizedApiBase, retornoActive, session])
 
   useEffect(() => {
     if (!retornoActive || !session || session.role !== 'musician') {
@@ -702,7 +771,9 @@ export default function App() {
                   webViewRef={retornoWebRef}
                   masterGain={retornoMasterGain}
                   onMasterGainChange={setRetornoMasterGain}
-                  inputLevelsByIndex={audioInputLevels?.levelsByIndex ?? {}}
+                  streamConnected={Boolean(streamWsUrl && retornoWebPlayerReady)}
+                  networkQuality={networkQuality}
+                  onLocalMixInteraction={bumpMixPoll}
                 />
               ) : null}
               {retornoWebPlayerReady ? (
@@ -714,7 +785,7 @@ export default function App() {
                   style={[styles.retornoWeb, { height: webRetornoWebViewHeight }]}
                   javaScriptEnabled
                   domStorageEnabled
-                scrollEnabled
+                  scrollEnabled
                   mediaPlaybackRequiresUserAction={false}
                   onLoadEnd={() => {
                     retornoWebRef.current?.injectJavaScript(
@@ -820,18 +891,7 @@ export default function App() {
         >
           <View style={styles.musicianMixerShell}>
             <Text style={styles.musicianSectionTitle}>Mesa</Text>
-            <ScrollView
-              style={styles.musicianMixerPane}
-              contentContainerStyle={[
-                styles.retornoScrollContent,
-                styles.musicianScreenContent,
-                isLandscape && styles.retornoScrollContentLandscape,
-              ]}
-              keyboardShouldPersistTaps="handled"
-              horizontal
-              showsHorizontalScrollIndicator
-              nestedScrollEnabled
-            >
+            <View style={styles.musicianMixerPane}>
               <RetornoMixerControls
                 apiBase={normalizedApiBase}
                 token={session.token}
@@ -843,9 +903,11 @@ export default function App() {
                 webViewRef={retornoWebRef}
                 masterGain={retornoMasterGain}
                 onMasterGainChange={setRetornoMasterGain}
-                inputLevelsByIndex={audioInputLevels?.levelsByIndex ?? {}}
+                streamConnected={Boolean(streamWsUrl && retornoWebPlayerReady)}
+                networkQuality={networkQuality}
+                onLocalMixInteraction={bumpMixPoll}
               />
-            </ScrollView>
+            </View>
           </View>
           <View style={styles.musicianControlPane}>
             <View style={styles.musicianLatencyBar}>
@@ -978,7 +1040,9 @@ export default function App() {
                 webViewRef={retornoWebRef}
                 masterGain={retornoMasterGain}
                 onMasterGainChange={setRetornoMasterGain}
-                inputLevelsByIndex={audioInputLevels?.levelsByIndex ?? {}}
+                streamConnected={Boolean(streamWsUrl && retornoWebPlayerReady)}
+                networkQuality={networkQuality}
+                onLocalMixInteraction={bumpMixPoll}
               />
             ) : null}
             {retornoWebPlayerReady ? (
@@ -1035,7 +1099,7 @@ export default function App() {
 const styles = StyleSheet.create({
   safeRoot: { flex: 1 },
   safeLight: { backgroundColor: '#fff' },
-  musicianShell: { backgroundColor: '#060b12' },
+  musicianShell: { backgroundColor: '#050910' },
   scrollRoot: { flex: 1 },
   scrollFill: { flex: 1 },
   panelScrollContent: { flexGrow: 1, paddingBottom: 24 },
@@ -1048,17 +1112,22 @@ const styles = StyleSheet.create({
   },
   musicianBody: {
     flexGrow: 1,
-    gap: 10,
+    gap: 12,
     padding: 10,
     paddingBottom: 28,
   },
   musicianMixerShell: {
-    borderRadius: 18,
-    backgroundColor: '#091018',
+    borderRadius: 22,
+    backgroundColor: '#080e16',
     borderWidth: 1,
-    borderColor: '#182230',
-    paddingTop: 8,
+    borderColor: '#1c2a3b',
+    paddingTop: 10,
     minHeight: 300,
+    shadowColor: '#000',
+    shadowOpacity: 0.34,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
   },
   musicianSectionTitle: {
     color: '#f0f6fc',
@@ -1069,11 +1138,11 @@ const styles = StyleSheet.create({
   },
   musicianControlPane: {
     width: '100%',
-    borderRadius: 18,
-    backgroundColor: '#0b1018',
+    borderRadius: 22,
+    backgroundColor: '#0a1018',
     borderWidth: 1,
-    borderColor: '#1f2b3b',
-    padding: 8,
+    borderColor: '#1f3044',
+    padding: 10,
     marginTop: 0,
   },
   musicianMixerPane: {
@@ -1086,16 +1155,16 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 12,
-    paddingBottom: 6,
+    paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: '#182230',
-    backgroundColor: '#0b1018',
-    minHeight: 42,
+    backgroundColor: '#0a111a',
+    minHeight: 46,
   },
   musicianIdentity: { flex: 1, paddingRight: 12 },
   musicianTitle: {
     color: '#f0f6fc',
-    fontSize: 17,
+    fontSize: 18,
     fontWeight: '800',
     marginBottom: 0,
   },
@@ -1106,9 +1175,9 @@ const styles = StyleSheet.create({
   },
   headerGhostBtn: {
     paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 10,
-    backgroundColor: '#111827',
+    paddingVertical: 7,
+    borderRadius: 11,
+    backgroundColor: '#101722',
     borderWidth: 1,
     borderColor: '#293548',
   },
@@ -1119,9 +1188,9 @@ const styles = StyleSheet.create({
   },
   headerPrimaryBtn: {
     paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 10,
-    backgroundColor: '#2f81f7',
+    paddingVertical: 7,
+    borderRadius: 11,
+    backgroundColor: '#1874da',
   },
   headerPrimaryTxt: {
     color: '#fff',
@@ -1138,13 +1207,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 999,
-    backgroundColor: '#101722',
+    backgroundColor: '#121b28',
     borderWidth: 1,
     borderColor: '#263246',
   },
   latencyPillActive: {
-    backgroundColor: '#16304f',
-    borderColor: '#58a6ff',
+    backgroundColor: '#15324f',
+    borderColor: '#6cb6ff',
   },
   latencyPillTxt: {
     color: '#dbe8f6',
@@ -1211,8 +1280,10 @@ const styles = StyleSheet.create({
   retornoWebFixed: {
     flex: 1,
     minHeight: 220,
-    borderRadius: 14,
+    borderRadius: 16,
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#25384e',
   },
   retornoWebGate: {
     marginHorizontal: 12,

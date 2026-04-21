@@ -79,7 +79,11 @@ Depois: `npm run dev` noutro terminal (ou no mesmo script de arranque). Se o buf
 
 ## Wi‑Fi 2,4 GHz e 5 GHz
 
-O servidor envia **sempre** blocos de **128 amostras/canal** (~2,7 ms a 48 kHz) por UDP/WebSocket para minimizar atraso. O perfil **Rede** no painel (`wifi_2_4` / `wifi_5` / `auto`) mantém-se como referência operacional; em **2,4 GHz** convém AP menos congestionado e telefones mais perto do AP.
+O motor de áudio do servidor processa **blocos PCM** configuráveis (**64 / 128 / 256 / 512** amostras estéreo a 48 kHz; o valor por defeito gravado no estado é **256**, ~5,3 ms por tick). Ajusta-se em **Rede** no painel admin (`PATCH /api/audio-engine`). Blocos **menores** reduzem a latência no PC e aumentam a carga de CPU; valores incorretos podem causar cortes se a captura não acompanhar.
+
+O perfil **Rede** (`wifi_2_4` / `wifi_5` / `auto`) é uma **referência operacional** no showfile; é independente do buffer **WebSocket** no telemóvel (perfis *low* / *stable* no retorno WebView).
+
+O app envia **telemetria** (`POST /api/telemetry`: RTT ao `/api/health` + contagem de gaps de sequência) para o **medidor de qualidade** (`GET /api/network-quality`) no desktop e no móvel.
 
 Recomendação operacional: roteador **5 GHz** dedicado ao show, servidor com **Ethernet** ao AP, telefones em **modo avião + só Wi‑Fi** quando possível.
 

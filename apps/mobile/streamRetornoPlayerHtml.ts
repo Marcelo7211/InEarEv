@@ -5,12 +5,20 @@
  */
 export type StreamRetornoLatency = 'low' | 'stable'
 
+export type StreamRetornoTelemetryOpts = {
+  /** Ex.: http://192.168.0.5:3847 — sem barra final */
+  apiBase: string
+  token: string
+}
+
 export function buildStreamRetornoPlayerHtml(
   wsUrl: string,
   latency: StreamRetornoLatency = 'low',
+  telemetry?: StreamRetornoTelemetryOpts | null,
 ): string {
   const injectedWs = JSON.stringify(wsUrl)
   const injectedLatency = JSON.stringify(latency)
+  const injectedTelemetry = JSON.stringify(telemetry ?? null)
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <style>
@@ -326,6 +334,10 @@ export function buildStreamRetornoPlayerHtml(
   var helloInfo = { blockSamples: 0, latencyProfile: LATENCY };
   var lastPacketSeq = -1;
   var sequenceGaps = 0;
+  var TELEMETRY = ${injectedTelemetry};
+  var teleTimer = null;
+  var reconnectAttempt = 0;
+  var reconnectTimer = null;
   var meterTimeDataL = null;
   var meterTimeDataR = null;
   var spectrumData = null;
@@ -637,7 +649,48 @@ export function buildStreamRetornoPlayerHtml(
     rawQueue.push(ab);
   }
 
+  function sendTelemetryOnce() {
+    if (!TELEMETRY || !TELEMETRY.apiBase || !TELEMETRY.token) return;
+    var base = String(TELEMETRY.apiBase).replace(/[/]+$/, '');
+    var t0 = Date.now();
+    fetch(base + '/api/health')
+      .then(function () {
+        var rtt = Date.now() - t0;
+        return fetch(base + '/api/telemetry', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer ' + TELEMETRY.token,
+          },
+          body: JSON.stringify({
+            rttMs: rtt,
+            sequenceGaps: sequenceGaps,
+            underruns: underruns,
+          }),
+        });
+      })
+      .catch(function () {});
+  }
+
+  function scheduleReconnect() {
+    if (reconnectTimer) return;
+    if (!ctx) return;
+    var delay = Math.min(10000, Math.round(400 * Math.pow(1.7, reconnectAttempt)));
+    reconnectAttempt++;
+    reconnectTimer = setTimeout(function () {
+      reconnectTimer = null;
+      connectWs();
+    }, delay);
+  }
+
   function connectWs() {
+    if (sock) {
+      try {
+        sock.onclose = null;
+        sock.close();
+      } catch (_e) {}
+      sock = null;
+    }
     sock = new WebSocket(WS_URL);
     sock.binaryType = 'arraybuffer';
     sock.onmessage = function (ev) {
@@ -666,14 +719,24 @@ export function buildStreamRetornoPlayerHtml(
       m.textContent = 'Erro de rede no WebSocket.';
     };
     sock.onclose = function () {
-      m.textContent = 'Ligação fechada.';
+      m.textContent = 'Ligação fechada — a voltar a ligar…';
       if (rafId) cancelAnimationFrame(rafId);
       rafId = 0;
+      if (teleTimer) {
+        clearInterval(teleTimer);
+        teleTimer = null;
+      }
+      lastPacketSeq = -1;
+      if (ctx) scheduleReconnect();
     };
     sock.onopen = function () {
+      reconnectAttempt = 0;
       m.textContent = 'Ligado — PCM 48 kHz → ' + String(outSr) + ' Hz.';
       nextPlayTime = 0;
       rafId = requestAnimationFrame(tick);
+      if (teleTimer) clearInterval(teleTimer);
+      teleTimer = setInterval(sendTelemetryOnce, 2000);
+      sendTelemetryOnce();
     };
   }
   go.onclick = function () {

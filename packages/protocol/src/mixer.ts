@@ -89,10 +89,12 @@ export function groupStereoFromMono(
   return { l: l * g.gain, r: r * g.gain }
 }
 
+/** Saturação por canal (L/R), sem limitador “de bus” que reparte ganho entre fontes. */
 function clip(l: number, r: number): { l: number; r: number } {
-  const pk = Math.max(Math.abs(l), Math.abs(r), 1e-9)
-  if (pk > 1) return { l: l / pk, r: r / pk }
-  return { l, r }
+  return {
+    l: Math.tanh(l),
+    r: Math.tanh(r),
+  }
 }
 
 /** Mix a partir de amostras mono por canal (entrada “microfone” / ASIO futuro). */

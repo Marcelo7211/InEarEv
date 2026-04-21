@@ -1,10 +1,17 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react'
 import { api, getApiBase } from './api'
-import type { Showfile } from '@inear/protocol'
+import type { ChannelStrip, MusicianStrip, Showfile } from '@inear/protocol'
 import {
   CHANNEL_ICON_OPTIONS,
   channelAccentColor,
-  channelIconBadge,
   MVP_MAX_CAPTURE_CHANNELS,
   retornoMixerChannelOrder,
 } from '@inear/protocol'
@@ -50,24 +57,105 @@ export function AdminApp() {
     | 'audio'
   >('session')
   const [error, setError] = useState<string | null>(null)
-  const [loginUser, setLoginUser] = useState('admin')
-  const [loginPass, setLoginPass] = useState('admin123')
+  const [networkQualityByUser, setNetworkQualityByUser] = useState<
+    Record<
+      string,
+      {
+        level: string
+        rttMs: number | null
+        jitterMs: number | null
+        gapsPerMinute: number
+        hint: string
+      }
+    >
+  >({})
+  const [audioBlockSamples, setAudioBlockSamples] = useState<number | null>(null)
+  const [setupRequired, setSetupRequired] = useState(false)
+  const [setupChecked, setSetupChecked] = useState(false)
+  const [loginUser, setLoginUser] = useState('')
+  const [loginPass, setLoginPass] = useState('')
   const [pairLoginCode, setPairLoginCode] = useState('')
   const [pairLoginUser, setPairLoginUser] = useState('musician1')
 
   const authHeaders = useMemo(() => ({ token }), [token])
 
+  /** Evita vários GET em paralelo: o último a terminar podia trazer snapshot antigo e “reverter” faders. */
+  const refreshShowfileQueueRef = useRef(Promise.resolve())
+
   const refreshShowfile = useCallback(async () => {
     if (!token) return
-    const sf = await api<Showfile>('/api/showfile', { ...authHeaders })
-    setShowfile(sf)
+    const tail = refreshShowfileQueueRef.current.then(async () => {
+      const sf = await api<Showfile>('/api/showfile', { ...authHeaders })
+      setShowfile(sf)
+    })
+    refreshShowfileQueueRef.current = tail.catch((e) => {
+      setError(String((e as Error).message))
+    })
+    await tail
   }, [token, authHeaders])
+
+  const mergeChannelStripIntoShowfile = useCallback((ch: ChannelStrip) => {
+    setShowfile((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        channels: prev.channels.map((c) => (c.id === ch.id ? { ...c, ...ch } : c)),
+      }
+    })
+  }, [])
+
+  const mergeMusicianStripIntoShowfile = useCallback((m: MusicianStrip) => {
+    setShowfile((prev) => {
+      if (!prev) return prev
+      return {
+        ...prev,
+        musicians: prev.musicians.map((x) => (x.id === m.id ? { ...x, ...m } : x)),
+      }
+    })
+  }, [])
 
   useEffect(() => {
     if (token) {
       refreshShowfile().catch((e) => setError(String(e.message)))
     }
   }, [token, refreshShowfile])
+
+  useEffect(() => {
+    if (!token || role !== 'admin') return
+    let cancelled = false
+    const load = async () => {
+      try {
+        const nq = await api<{
+          byUsername: Record<
+            string,
+            {
+              level: string
+              rttMs: number | null
+              jitterMs: number | null
+              gapsPerMinute: number
+              hint: string
+            }
+          >
+        }>('/api/network-quality', { token })
+        const sess = await api<{ audioBlockSamples?: number }>('/api/session', {
+          token,
+        })
+        if (cancelled) return
+        setNetworkQualityByUser(nq.byUsername ?? {})
+        if (typeof sess.audioBlockSamples === 'number') {
+          setAudioBlockSamples(sess.audioBlockSamples)
+        }
+      } catch {
+        if (!cancelled) setNetworkQualityByUser({})
+      }
+    }
+    void load()
+    const t = setInterval(load, 4000)
+    return () => {
+      cancelled = true
+      clearInterval(t)
+    }
+  }, [token, role])
 
   /** Remove JWT da barra de endereço após consumir (mantém ?api= para refresh). */
   useEffect(() => {
@@ -79,6 +167,26 @@ export function AdminApp() {
     const q = url.searchParams.toString()
     window.history.replaceState({}, document.title, url.pathname + (q ? `?${q}` : ''))
   }, [])
+
+  useEffect(() => {
+    if (token) return
+    let cancelled = false
+    const loadSetupStatus = async () => {
+      try {
+        const s = await api<{ required: boolean }>('/api/setup/status')
+        if (cancelled) return
+        setSetupRequired(Boolean(s.required))
+      } catch {
+        if (!cancelled) setSetupRequired(false)
+      } finally {
+        if (!cancelled) setSetupChecked(true)
+      }
+    }
+    void loadSetupStatus()
+    return () => {
+      cancelled = true
+    }
+  }, [token])
 
   async function login() {
     setError(null)
@@ -116,6 +224,24 @@ export function AdminApp() {
       setRole(r.role)
       localStorage.setItem('inear_token', r.token)
       localStorage.setItem('inear_role', r.role)
+    } catch (e) {
+      setError(String((e as Error).message))
+    }
+  }
+
+  async function bootstrapAdmin() {
+    setError(null)
+    try {
+      const r = await api<{ token: string; role: Role }>('/api/setup/bootstrap', {
+        method: 'POST',
+        body: JSON.stringify({ username: loginUser, password: loginPass }),
+      })
+      setToken(r.token)
+      setRole(r.role)
+      localStorage.setItem('inear_token', r.token)
+      localStorage.setItem('inear_role', r.role)
+      setSetupRequired(false)
+      setSetupChecked(true)
     } catch (e) {
       setError(String((e as Error).message))
     }
@@ -173,40 +299,27 @@ export function AdminApp() {
       >
         <h1 style={{ marginTop: 0 }}>inEar — login</h1>
         <p style={{ color: '#9aa0a6' }}>API: {getApiBase()}</p>
-        <aside
-          style={{
-            background: '#1a2332',
-            border: '1px solid #394457',
-            borderRadius: 8,
-            padding: 12,
-            marginBottom: 16,
-            fontSize: 13,
-            color: '#bdc1c6',
-          }}
-        >
-          <strong>Contas de teste (primeira execução)</strong>
-          <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
-            <li>
-              <strong>Admin:</strong> usuário <code>admin</code> · senha{' '}
-              <code>admin123</code>
-            </li>
-            <li>
-              <strong>Músico 1:</strong> <code>musician1</code> · senha{' '}
-              <code>musician1</code>
-            </li>
-            <li>
-              <strong>Músico 2:</strong> <code>musician2</code> · senha{' '}
-              <code>musician2</code>
-            </li>
-          </ul>
-          <p style={{ margin: '8px 0 0', color: '#9aa0a6' }}>
-            O JWT aparece no navegador após entrar (localStorage). Para o app
-            Android/Expo preview, use login abaixo — o token é retornado no JSON
-            da API.
-          </p>
-        </aside>
+        {setupChecked && setupRequired ? (
+          <aside
+            style={{
+              background: '#1a2332',
+              border: '1px solid #394457',
+              borderRadius: 8,
+              padding: 12,
+              marginBottom: 16,
+              fontSize: 13,
+              color: '#bdc1c6',
+            }}
+          >
+            <strong>Primeira instalação</strong>
+            <p style={{ margin: '8px 0 0', color: '#9aa0a6' }}>
+              Crie agora o acesso de administrador. O cadastro de músicos será
+              feito depois, dentro do painel Admin.
+            </p>
+          </aside>
+        ) : null}
         {error && <p style={{ color: '#f28b82' }}>{error}</p>}
-        <h2>Admin / músico (senha)</h2>
+        <h2>{setupChecked && setupRequired ? 'Criar Admin' : 'Admin / músico (senha)'}</h2>
         <label style={{ display: 'block', marginBottom: 8 }}>
           Usuário
           <input
@@ -224,30 +337,38 @@ export function AdminApp() {
             onChange={(e) => setLoginPass(e.target.value)}
           />
         </label>
-        <button type="button" onClick={login}>
-          Entrar
-        </button>
-        <hr style={{ margin: '24px 0', borderColor: '#333' }} />
-        <h2>Músico — pairing</h2>
-        <label style={{ display: 'block', marginBottom: 8 }}>
-          Código (6 dígitos)
-          <input
-            style={{ width: '100%', marginTop: 4 }}
-            value={pairLoginCode}
-            onChange={(e) => setPairLoginCode(e.target.value)}
-          />
-        </label>
-        <label style={{ display: 'block', marginBottom: 8 }}>
-          Usuário músico
-          <input
-            style={{ width: '100%', marginTop: 4 }}
-            value={pairLoginUser}
-            onChange={(e) => setPairLoginUser(e.target.value)}
-          />
-        </label>
-        <button type="button" onClick={pairLogin}>
-          Entrar com código
-        </button>
+        {setupChecked && setupRequired ? (
+          <button type="button" onClick={bootstrapAdmin}>
+            Criar admin e entrar
+          </button>
+        ) : (
+          <>
+            <button type="button" onClick={login}>
+              Entrar
+            </button>
+            <hr style={{ margin: '24px 0', borderColor: '#333' }} />
+            <h2>Músico — pairing</h2>
+            <label style={{ display: 'block', marginBottom: 8 }}>
+              Código (6 dígitos)
+              <input
+                style={{ width: '100%', marginTop: 4 }}
+                value={pairLoginCode}
+                onChange={(e) => setPairLoginCode(e.target.value)}
+              />
+            </label>
+            <label style={{ display: 'block', marginBottom: 8 }}>
+              Usuário músico
+              <input
+                style={{ width: '100%', marginTop: 4 }}
+                value={pairLoginUser}
+                onChange={(e) => setPairLoginUser(e.target.value)}
+              />
+            </label>
+            <button type="button" onClick={pairLogin}>
+              Entrar com código
+            </button>
+          </>
+        )}
       </main>
     )
   }
@@ -255,48 +376,473 @@ export function AdminApp() {
   const selfMusician = showfile?.musicians.find(
     (m) => m.username === (token ? parseJwtSub(token) : ''),
   )
-
-  return (
-    <main
-      style={{
+  const ui = {
+    main: {
         padding: 24,
         minHeight: '100vh',
         overflowY: 'auto',
-        boxSizing: 'border-box',
+      boxSizing: 'border-box' as const,
         background:
-          'radial-gradient(circle at top left, rgba(88,166,255,.10), transparent 22%), linear-gradient(180deg,#0b0f15 0%,#10151d 100%)',
-      }}
-    >
-      <header
-        style={{
+        'radial-gradient(circle at 8% -10%, rgba(88,166,255,.22), transparent 30%), radial-gradient(circle at 92% -18%, rgba(46,160,67,.12), transparent 32%), linear-gradient(180deg,#070b11 0%,#0d131d 100%)',
+    },
+    panelHeader: {
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
           marginBottom: 16,
           padding: 16,
-          border: '1px solid #273244',
+      border: '1px solid #2f425b',
           borderRadius: 18,
-          background: 'linear-gradient(180deg,#171e29 0%,#10151d 100%)',
-        }}
-      >
-        <h1 style={{ margin: 0 }}>inEar — painel ({role})</h1>
-        <button type="button" onClick={logout}>
-          Sair
-        </button>
-      </header>
-      {error && <p style={{ color: '#f28b82' }}>{error}</p>}
-      <nav
-        style={{
+      background: 'linear-gradient(180deg,#182434 0%,#111a26 100%)',
+      boxShadow: '0 10px 26px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.03)',
+    },
+    navWrap: {
           display: 'flex',
           gap: 8,
           marginBottom: 16,
           flexWrap: 'wrap',
           padding: 10,
-          border: '1px solid #273244',
+      border: '1px solid #2b3f57',
           borderRadius: 18,
-          background: '#121923',
-        }}
-      >
+      background: 'linear-gradient(180deg,#111a27 0%,#0f1722 100%)',
+      boxShadow: 'inset 0 1px 0 rgba(255,255,255,.03)',
+    },
+    tabBtn: {
+      fontWeight: 600,
+      background: '#1e2836',
+      color: '#c9d1d9',
+      border: '1px solid #3a4a5f',
+      borderRadius: 999,
+      padding: '7px 14px',
+      letterSpacing: '.02em',
+    },
+    tabBtnActive: {
+      fontWeight: 800,
+      background: 'linear-gradient(180deg,#27466b 0%,#1f3550 100%)',
+      color: '#f0f6fc',
+      border: '1px solid #5aa2ff',
+      boxShadow: '0 0 0 1px rgba(88,166,255,.20) inset',
+    },
+    pillBtn: {
+      borderRadius: 999,
+      border: '1px solid #3a4a5f',
+      background: '#1d2634',
+      color: '#e6edf3',
+      padding: '8px 14px',
+      fontWeight: 700,
+    },
+    panelCard: {
+      border: '1px solid #2f425b',
+      borderRadius: 18,
+      padding: 18,
+      background: 'linear-gradient(180deg,#162231 0%,#0f1925 100%)',
+      boxShadow: '0 8px 22px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.03)',
+    },
+  } as const
+
+  return (
+    <main style={ui.main}>
+      <header style={ui.panelHeader}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <h1 style={{ margin: 0 }}>inEar — painel ({role})</h1>
+          <span
+            style={{
+              borderRadius: 999,
+              border: '1px solid #2ea043',
+              color: '#9be9a8',
+              fontSize: 11,
+              fontWeight: 800,
+              padding: '3px 10px',
+              letterSpacing: '.08em',
+            }}
+          >
+            LIVE MIX
+          </span>
+        </div>
+        <button type="button" onClick={logout} style={ui.pillBtn}>
+          Sair
+        </button>
+      </header>
+      <style>{`
+        .inearRange{
+          -webkit-appearance:none;appearance:none;width:100%;height:22px;background:transparent;cursor:pointer;
+        }
+        .inearRange::-webkit-slider-runnable-track{
+          height:7px;border-radius:999px;background:linear-gradient(90deg,#2ea043 0 var(--fill,50%),#18222f var(--fill,50%) 100%);border:1px solid #425670;
+        }
+        .inearRange::-webkit-slider-thumb{
+          -webkit-appearance:none;appearance:none;margin-top:-7px;width:16px;height:24px;border-radius:4px;
+          border:1px solid #8da7c7;background:linear-gradient(180deg,#fbfcff 0%,#9ab6d6 45%,#4b627f 100%);
+          box-shadow:0 0 0 2px rgba(47,129,247,.18),0 4px 10px rgba(0,0,0,.35);
+        }
+        .inearRange::-moz-range-track{
+          height:7px;border-radius:999px;background:linear-gradient(90deg,#2ea043 0 var(--fill,50%),#18222f var(--fill,50%) 100%);border:1px solid #425670;
+        }
+        .inearRange::-moz-range-thumb{
+          width:16px;height:24px;border-radius:4px;border:1px solid #8da7c7;
+          background:linear-gradient(180deg,#fbfcff 0%,#9ab6d6 45%,#4b627f 100%);
+          box-shadow:0 0 0 2px rgba(47,129,247,.18),0 4px 10px rgba(0,0,0,.35);
+        }
+        .inearVRange{
+          -webkit-appearance:none;appearance:none;width:var(--faderLen,163px);height:26px;background:transparent;cursor:pointer;
+        }
+        .inearVRange::-webkit-slider-runnable-track{
+          height:9px;border-radius:999px;background:linear-gradient(90deg,#2ea043 0 var(--fill,50%),#18222f var(--fill,50%) 100%);border:1px solid #425670;
+        }
+        .inearVRange::-webkit-slider-thumb{
+          -webkit-appearance:none;appearance:none;margin-top:-8px;width:21px;height:29px;border-radius:5px;
+          border:1px solid #8da7c7;background:linear-gradient(180deg,#fbfcff 0%,#9ab6d6 45%,#4b627f 100%);
+          box-shadow:0 0 0 2px rgba(47,129,247,.18),0 4px 10px rgba(0,0,0,.35);
+        }
+        .inearVRange::-moz-range-track{
+          height:9px;border-radius:999px;background:linear-gradient(90deg,#2ea043 0 var(--fill,50%),#18222f var(--fill,50%) 100%);border:1px solid #425670;
+        }
+        .inearVRange::-moz-range-thumb{
+          width:21px;height:29px;border-radius:5px;border:1px solid #8da7c7;
+          background:linear-gradient(180deg,#fbfcff 0%,#9ab6d6 45%,#4b627f 100%);
+          box-shadow:0 0 0 2px rgba(47,129,247,.18),0 4px 10px rgba(0,0,0,.35);
+        }
+        .volCard{
+          width:100%;max-width:96px;margin:0;overflow:hidden;
+          display:flex;flex-direction:column;align-items:center;justify-content:flex-start;height:100%;
+          background:#303030;color:rgba(255,255,255,.92);
+          border:1px solid #3f4f66;border-radius:6px;padding:5px 3px 6px;
+          box-shadow:inset 0 0 4px rgba(0,0,0,.75),0 8px 18px rgba(0,0,0,.3);
+        }
+        .volCard__title{
+          font-size:9px;color:#dbe6f3;font-weight:800;text-align:center;margin-bottom:3px;width:100%;
+        }
+        .volCard__db{
+          display:flex;justify-content:center;margin:0 0 5px;width:100%;
+        }
+        .volCard__db span{
+          width:100%;max-width:100%;padding:.12rem .25rem;border-radius:2px;color:#2af02a;background:#202020;
+          box-shadow:inset 0 0 3px 2px rgba(0,0,0,.5);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+          text-align:center;font-size:9px;letter-spacing:.02em;box-sizing:border-box;
+        }
+        .volCard__row{
+          flex:1;min-height:0;width:100%;display:flex;justify-content:center;align-items:stretch;padding:5px 0 2px;
+          gap:0;
+        }
+        .volCard__vuCol{
+          display:flex;align-items:stretch;justify-content:center;width:31px;flex-shrink:0;
+        }
+        .volCard__vuFrame{
+          flex:1;display:flex;flex-direction:column;align-items:center;min-width:0;width:100%;
+          padding:4px 2px;border-radius:5px;border:1px solid #2f3f55;
+          background:linear-gradient(180deg,#0f141c 0%,#0b1016 100%);
+          box-shadow:inset 0 0 6px rgba(0,0,0,.55);
+        }
+        .volCard__vuLabel{
+          font-size:7px;font-weight:800;letter-spacing:.1em;color:#7f93ab;margin-bottom:3px;
+        }
+        .volCard__vuMeterRow{
+          flex:1;display:flex;align-items:stretch;justify-content:center;width:100%;min-height:0;gap:2px;
+        }
+        .volCard__vuMeter{
+          flex:0 0 13px;width:13px;max-width:17px;border-radius:4px;
+          background:linear-gradient(-180deg,#f40000 0%,#ec9500 10%,#bade09 18%,#429321 45%);
+          -webkit-mask:linear-gradient(to bottom,transparent 0,transparent calc(100% - var(--vuFill,0%)),#000 calc(100% - var(--vuFill,0%)),#000 100%);
+          mask:linear-gradient(to bottom,transparent 0,transparent calc(100% - var(--vuFill,0%)),#000 calc(100% - var(--vuFill,0%)),#000 100%);
+          box-shadow:inset 0 0 3px rgba(0,0,0,.45);
+        }
+        .volCard__marks{
+          display:flex;flex-flow:column nowrap;justify-content:space-between;height:100%;
+          font-size:.4rem;color:#808080;line-height:1;text-align:right;min-width:0;flex:1 1 auto;
+        }
+        .volCard__fader{
+          flex:0 0 36px;width:36px;min-width:36px;min-height:0;height:100%;
+          display:flex;align-items:center;justify-content:center;position:relative;
+          margin-left:14px;overflow:visible;box-sizing:border-box;
+        }
+        .volCard__fader:after{
+          content:"";position:absolute;left:50%;top:0;width:4px;height:100%;
+          transform:translateX(-50%);
+          background:#121212;border-radius:999px;
+          box-shadow:inset 0 0 2px rgba(255,255,255,.06);
+        }
+        .mixerHStrip{
+          border:1px solid #334861;border-radius:12px;padding:10px;background:#111926;margin-bottom:12px;
+          box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
+        }
+        .mixerHStrip .meter-head{
+          display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;
+        }
+        .mixerHStrip .meter-name{
+          color:#d2a8ff;font-weight:700;font-size:13px;
+        }
+        .mixerHStrip .meter-value{
+          color:#9ab8d8;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+          background:#222b36;border:1px solid #3c5068;border-radius:4px;padding:2px 6px;
+        }
+        .mixerHEqRow{
+          display:flex;align-items:center;gap:8px;margin-top:8px;
+        }
+        .mixerHEqRow .eq-tag{
+          min-width:52px;color:#9ab8d8;font-size:11px;font-weight:700;
+        }
+        .faderMarks{
+          display:flex;justify-content:space-between;gap:8px;margin-top:5px;padding:0 2px;
+          color:#7f93ab;font-size:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+        }
+        .faderMarks span{ opacity:.92; }
+        .eqKnobCol{
+          display:flex;flex-direction:column;flex-wrap:nowrap;gap:5px;align-items:stretch;
+        }
+        .chCard__mixRow{
+          display:grid;grid-template-columns:minmax(28px, max-content) minmax(42px, max-content);
+          column-gap:6px;align-items:stretch;justify-content:center;width:100%;max-width:100%;
+        }
+        .chCard__mixRow--soloVol{
+          grid-template-columns:minmax(28px, max-content);
+          column-gap:0;
+        }
+        .chBoardShell{
+          min-width:0;
+          width:100%;
+          max-width:100%;
+          box-sizing:border-box;
+          overflow-x:auto;
+          overflow-y:hidden;
+          border:1px solid #334861;
+          border-radius:10px;
+          background:linear-gradient(180deg,#131a24 0%,#0f141c 100%);
+          padding:6px 4px 10px;
+          box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+        }
+        .chBoard{
+          display:flex;gap:6px;align-items:stretch;
+          width:max-content;
+          max-width:none;
+          padding:2px 0 8px;
+          scroll-snap-type:x mandatory;
+        }
+        .chBoard.musicianDeskBoard{
+          min-height:260px;
+          align-items:stretch;
+        }
+        .chBoard.musicianDeskBoard .chCard{
+          width:min(158px, 92vw);padding:4px 5px;gap:4px;border-radius:7px;
+        }
+        .chBoard.musicianDeskBoard .chCard__hdr{gap:4px;}
+        .chBoard.musicianDeskBoard .chCard__badge{
+          width:22px;height:22px;border-radius:6px;font-size:10px;
+        }
+        .chBoard.musicianDeskBoard .chCard__titles strong{font-size:10px;}
+        .chBoard.musicianDeskBoard .chCard__titles small{font-size:8px;}
+        .chBoard.musicianDeskBoard .chCard__mixRow{
+          grid-template-columns:minmax(20px, max-content) minmax(32px, max-content);
+          column-gap:4px;
+        }
+        .chBoard.musicianDeskBoard .chCard__mixRow--soloVol{
+          grid-template-columns:minmax(20px, max-content);
+        }
+        .chBoard.musicianDeskBoard .eqKnob{
+          width:34px;padding:3px 2px;border-radius:6px;gap:1px;
+        }
+        .chBoard.musicianDeskBoard .eqKnob__label{font-size:8px;}
+        .chBoard.musicianDeskBoard .eqKnob__dial{width:28px;height:28px;}
+        .chBoard.musicianDeskBoard .eqKnob__dial::after{height:9px;width:2px;}
+        .chBoard.musicianDeskBoard .eqKnob__value{font-size:7px;padding:1px 2px;}
+        .chBoard.musicianDeskBoard .volCard{
+          max-width:72px;padding:4px 2px 5px;border-radius:5px;
+        }
+        .chBoard.musicianDeskBoard .volCard__vuCol{width:26px;}
+        .chBoard.musicianDeskBoard .volCard__vuMeter{
+          flex:0 0 11px;width:11px;max-width:14px;
+        }
+        .chBoard.musicianDeskBoard .volCard__fader{
+          flex:0 0 30px;width:30px;min-width:30px;margin-left:10px;
+        }
+        .musicianProfilesScroll{
+          max-height:min(310px, 42vh);
+          min-height:0;
+          overflow-y:auto;
+          overflow-x:hidden;
+          scroll-snap-type:y mandatory;
+          overscroll-behavior-y:contain;
+          display:flex;
+          flex-direction:column;
+          gap:12px;
+          padding:4px 12px 8px 2px;
+        }
+        .musicianProfileCard{
+          scroll-snap-align:start;
+          scroll-snap-stop:always;
+          flex:0 0 auto;
+          box-sizing:border-box;
+        }
+        .chCard__mixRow .eqKnobCol{align-items:flex-end;}
+        .eqKnobRow{
+          display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start;
+        }
+        .eqKnob{
+          width:42px;display:flex;flex-direction:column;align-items:center;gap:2px;
+          padding:4px 2px;border:1px solid color-mix(in srgb, var(--ch-accent, #58a6ff) 35%, #324a64);
+          border-radius:7px;background:#101822;
+          box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
+        }
+        .eqKnob__label{
+          font-size:9px;font-weight:800;letter-spacing:.03em;color:color-mix(in srgb, var(--ch-accent, #dbe6f3) 70%, #dbe6f3);text-transform:uppercase;
+        }
+        .eqKnob__dial{
+          position:relative;width:34px;height:34px;border-radius:999px;
+          background:
+            conic-gradient(from -130deg,#2ea043 0 var(--knob-fill,50%), #243347 var(--knob-fill,50%) 100%);
+          box-shadow:
+            inset 0 0 0 2px #0d141d,
+            0 5px 10px rgba(0,0,0,.32),
+            0 0 0 1px color-mix(in srgb, var(--ch-accent, #58a6ff) 55%, transparent),
+            0 0 14px color-mix(in srgb, var(--ch-accent, #58a6ff) 22%, transparent);
+          border:1px solid color-mix(in srgb, var(--ch-accent, #58a6ff) 40%, #445b75);
+        }
+        .eqKnob__dial::after{
+          content:"";position:absolute;left:50%;top:50%;width:2px;height:11px;border-radius:99px;
+          background:#f6fbff;transform-origin:50% calc(100% - 2px);
+          transform:translate(-50%,-90%) rotate(var(--knob-angle,-130deg));
+          box-shadow:0 0 0 1px rgba(0,0,0,.35);
+        }
+        .eqKnob__input{
+          position:absolute;inset:0;opacity:0;cursor:pointer;
+        }
+        .eqKnob__value{
+          width:100%;max-width:100%;text-align:center;padding:1px 3px;border-radius:3px;
+          border:1px solid color-mix(in srgb, var(--ch-accent, #58a6ff) 25%, #3c5068);
+          background:#222b36;color:#9ab8d8;font-size:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+          box-sizing:border-box;
+        }
+        .chCard{
+          --ch-accent:#58a6ff;
+          flex:0 0 auto;width:min(198px, 88vw);scroll-snap-align:start;box-sizing:border-box;
+          border-radius:8px;padding:6px 7px;
+          background:linear-gradient(180deg,#1a212d 0%,#11161f 100%);
+          box-shadow:0 10px 24px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.03);
+          display:flex;flex-direction:column;gap:5px;
+        }
+        .chCard__hdr{
+          display:flex;align-items:flex-start;gap:6px;
+        }
+        .chCard__badge{
+          position:relative;
+          width:27px;height:27px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:900;
+          color:#07111a;box-shadow:0 6px 14px rgba(0,0,0,.25);flex:0 0 auto;
+          font-size:14px;
+        }
+        .chCard__badge--muted::after{
+          content:"";
+          position:absolute;left:50%;top:50%;
+          width:2px;height:22px;border-radius:99px;background:#f85149;
+          transform:translate(-50%,-50%) rotate(-35deg);
+          box-shadow:0 0 8px rgba(248,81,73,.6);
+        }
+        .chCard__titles{min-width:0;flex:1 1 auto;}
+        .chCard__titles strong{display:block;font-size:11px;line-height:1.15;color:#e8eaed;}
+        .chCard__titles small{display:block;margin-top:2px;color:#9aa0a6;font-size:9px;line-height:1.2;}
+        .deskField{
+          width:100%;box-sizing:border-box;padding:4px 6px;border-radius:6px;border:1px solid #3c5068;
+          background:#141c28;color:#e8eaed;outline:none;font-size:10px;
+          box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
+        }
+        .deskField:focus{border-color:color-mix(in srgb, var(--ch-accent, #58a6ff) 55%, #3c5068);box-shadow:0 0 0 2px color-mix(in srgb, var(--ch-accent, #58a6ff) 25%, transparent);}
+        .deskSelect{
+          width:100%;box-sizing:border-box;padding:4px 6px;border-radius:6px;border:1px solid #3c5068;
+          background:#141c28;color:#e8eaed;outline:none;font-size:10px;
+        }
+        .deskMiniRow{display:flex;gap:4px;align-items:center;}
+        .deskColor{
+          width:24px;height:22px;padding:0;border-radius:6px;border:1px solid color-mix(in srgb, var(--ch-accent, #58a6ff) 35%, #3c5068);
+          background:transparent;cursor:pointer;box-shadow:inset 0 0 0 2px rgba(0,0,0,.35);
+        }
+        .deskBtn{
+          border:1px solid color-mix(in srgb, var(--ch-accent, #58a6ff) 35%, #3c5068);
+          background:linear-gradient(180deg,#223047 0%,#141c28 100%);
+          color:#dbe6f3;border-radius:6px;padding:4px 7px;font-weight:800;font-size:9px;cursor:pointer;
+          box-shadow:inset 0 1px 0 rgba(255,255,255,.05);
+        }
+        .deskBtn:hover{border-color:color-mix(in srgb, var(--ch-accent, #58a6ff) 65%, #3c5068);}
+        .deskMute{
+          position:relative;display:inline-flex;align-items:center;gap:6px;user-select:none;
+          padding:2px 6px;border-radius:999px;border:1px solid #3c5068;background:#141c28;color:#dbe6f3;font-size:9px;font-weight:800;
+          box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
+        }
+        .deskMute input{
+          position:absolute;opacity:0;
+        }
+        .deskMute__led{
+          width:8px;height:8px;border-radius:999px;background:#2ea043;box-shadow:0 0 8px rgba(46,160,67,.55);
+        }
+        .deskMute__toggle{
+          position:relative;display:inline-flex;align-items:center;justify-content:center;
+          width:18px;height:18px;border-radius:999px;
+          border:1px solid #5f7998;background:#172234;color:#bdd6f7;
+          font-size:10px;line-height:1;
+        }
+        .deskMute__toggleDot{
+          position:absolute;right:-2px;bottom:-2px;
+          width:6px;height:6px;border-radius:999px;background:#2ea043;
+          box-shadow:0 0 6px rgba(46,160,67,.55);
+        }
+        .deskMute--on{
+          border-color:color-mix(in srgb, #f85149 55%, #3c5068);
+          color:#ffb4b0;
+          background:linear-gradient(180deg,#2a1a1f 0%,#141c28 100%);
+        }
+        .deskMute--on .deskMute__led{
+          background:#f85149;box-shadow:0 0 12px rgba(248,81,73,.55);
+        }
+        .deskMute--on .deskMute__toggle{
+          border-color:#f85149;background:#2b1a22;color:#f2f6ff;
+        }
+        .deskMute--on .deskMute__toggleDot{
+          background:#f85149;box-shadow:0 0 8px rgba(248,81,73,.55);
+        }
+        .deskLatch{
+          position:relative;display:inline-flex;align-items:center;gap:6px;user-select:none;width:100%;box-sizing:border-box;
+          padding:2px 6px;border-radius:999px;border:1px solid #3c5068;background:#141c28;color:#dbe6f3;font-size:9px;font-weight:800;
+          box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
+        }
+        .deskLatch input{position:absolute;opacity:0;}
+        .deskLatch__led{
+          width:8px;height:8px;border-radius:999px;background:#6e7681;box-shadow:0 0 6px rgba(110,118,129,.25);
+        }
+        .deskLatch--on{
+          border-color:color-mix(in srgb, #fbbc04 55%, #3c5068);
+          color:#ffe7a8;
+          background:linear-gradient(180deg,#2a2416 0%,#141c28 100%);
+        }
+        .deskLatch--on .deskLatch__led{
+          background:#fbbc04;box-shadow:0 0 12px rgba(251,188,4,.45);
+        }
+        .panInline{
+          margin:0 auto 4px;max-width:184px;padding:4px 6px;border:1px solid #334861;border-radius:6px;background:#111926;
+          box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
+        }
+        .panInline__head{
+          display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;
+          color:#dbe6f3;font-size:10px;font-weight:800;line-height:1.1;
+        }
+        .panInline__scale{
+          display:flex;justify-content:space-between;margin-top:2px;color:#8ea8c2;font-size:10px;line-height:1.1;
+          font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+        }
+        .panInline .inearRange{
+          height:14px;
+        }
+        .panInline .inearRange::-webkit-slider-runnable-track{
+          height:5px;
+        }
+        .panInline .inearRange::-webkit-slider-thumb{
+          margin-top:-5px;width:13px;height:18px;border-radius:3px;
+        }
+        .panInline .inearRange::-moz-range-track{
+          height:5px;
+        }
+        .panInline .inearRange::-moz-range-thumb{
+          width:13px;height:18px;border-radius:3px;
+        }
+      `}</style>
+      {error && <p style={{ color: '#f28b82' }}>{error}</p>}
+      <nav style={ui.navWrap}>
         {role === 'admin' && (
           <>
             {(
@@ -305,7 +851,7 @@ export function AdminApp() {
                 ['channels', 'Canais'],
                 ['musicians', 'Músicos'],
                 ['network', 'Rede'],
-                ['audio', 'Entrada Mac'],
+                ['audio', 'Entrada de áudio'],
                 ['pairing', 'Pairing'],
               ] as const
             ).map(([k, label]) => (
@@ -314,12 +860,8 @@ export function AdminApp() {
                 type="button"
                 onClick={() => setTab(k)}
                 style={{
-                  fontWeight: tab === k ? 700 : 400,
-                  background: tab === k ? '#394457' : '#252a33',
-                  color: '#e8eaed',
-                  border: '1px solid #444',
-                  borderRadius: 6,
-                  padding: '6px 12px',
+                  ...ui.tabBtn,
+                  ...(tab === k ? ui.tabBtnActive : {}),
                 }}
               >
                 {label}
@@ -338,14 +880,7 @@ export function AdminApp() {
       {!showfile && <p>Carregando showfile…</p>}
 
       {showfile && role === 'admin' && tab === 'session' && (
-        <section
-          style={{
-            border: '1px solid #2d394d',
-            borderRadius: 18,
-            padding: 18,
-            background: 'linear-gradient(180deg,#171d28 0%,#0f141c 100%)',
-          }}
-        >
+        <section style={ui.panelCard}>
           <h2 style={{ marginTop: 0 }}>Sessão</h2>
           <p>
             HTTP <code>{getApiBase()}</code> · UDP áudio{' '}
@@ -355,16 +890,17 @@ export function AdminApp() {
           <p>Perfil Wi‑Fi: {showfile.networkProfile}</p>
           <p style={{ color: '#9aa0a6', maxWidth: 640 }}>
             Canais da mesa: com a captura ativa, <strong>Sincronizar canais da interface</strong>{' '}
-            cria <code>if_0</code>… conforme o N definido em <strong>Entrada Mac</strong>. Depois
+            cria <code>if_0</code>… conforme o N definido em <strong>Entrada de áudio</strong>. Depois
             abre <strong>Canais</strong> para gain/pan (admin) e entra como músico para sends no
             ouvido.
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 8 }}>
-            <button type="button" onClick={() => refreshShowfile()}>
+            <button type="button" onClick={() => refreshShowfile()} style={ui.pillBtn}>
               Recarregar showfile
             </button>
             <button
               type="button"
+              style={ui.pillBtn}
               onClick={async () => {
                 setError(null)
                 try {
@@ -411,22 +947,21 @@ export function AdminApp() {
           token={token}
           showfile={showfile}
           onSaved={refreshShowfile}
+          onChannelStripPatched={mergeChannelStripIntoShowfile}
         />
       )}
 
       {showfile && role === 'admin' && tab === 'musicians' && (
-        <MusicianTable showfile={showfile} token={token} onSaved={refreshShowfile} />
+        <MusicianTable
+          showfile={showfile}
+          token={token}
+          onSaved={refreshShowfile}
+          onMusicianStripPatched={mergeMusicianStripIntoShowfile}
+        />
       )}
 
       {showfile && role === 'admin' && tab === 'audio' && (
-        <section
-          style={{
-            border: '1px solid #2d394d',
-            borderRadius: 18,
-            padding: 18,
-            background: 'linear-gradient(180deg,#171d28 0%,#0f141c 100%)',
-          }}
-        >
+        <section style={ui.panelCard}>
           <MacAudioInputsPanel
             token={token}
             role={role}
@@ -437,18 +972,117 @@ export function AdminApp() {
       )}
 
       {showfile && role === 'admin' && tab === 'network' && (
-        <section
+        <section style={ui.panelCard}>
+          <h2 style={{ marginTop: 0 }}>Rede e motor de áudio</h2>
+          <p style={{ color: '#9aa0a6', maxWidth: 720 }}>
+            O perfil Wi‑Fi é uma referência operacional. O <strong>bloco PCM</strong> (servidor)
+            define quantas amostras são processadas por tick — valores menores reduzem a
+            latência do PC ao custo de mais CPU e risco de cortes. Isto é independente do
+            perfil <em>low/stable</em> do WebSocket no telemóvel (buffer do cliente).
+          </p>
+          <h3 style={{ color: '#e8eaed', marginBottom: 8 }}>Medidor de qualidade (por músico)</h3>
+          <div
           style={{
-            border: '1px solid #2d394d',
-            borderRadius: 18,
-            padding: 18,
-            background: 'linear-gradient(180deg,#171d28 0%,#0f141c 100%)',
-          }}
-        >
-          <h2>Perfil de rede (MVP)</h2>
+              display: 'grid',
+              gap: 10,
+              marginBottom: 20,
+              maxWidth: 720,
+            }}
+          >
+            {showfile.musicians.map((m) => {
+              const q = networkQualityByUser[m.username]
+              const dot = !q
+                ? '#484f58'
+                : q.level === 'bad'
+                  ? '#f85149'
+                  : q.level === 'warn'
+                    ? '#d29922'
+                    : '#39ff14'
+              return (
+                <div
+                  key={m.id}
+                  style={{
+                    border: '1px solid #30363d',
+                    borderRadius: 12,
+                    padding: 12,
+                    background: '#11161f',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span
+                      style={{
+                        width: 14,
+                        height: 14,
+                        borderRadius: 999,
+                        background: dot,
+                        border: '1px solid #484f58',
+                      }}
+                    />
+                    <strong style={{ color: '#e8eaed' }}>{m.name}</strong>
+                    <span style={{ color: '#8b949e', fontSize: 13 }}>({m.username})</span>
+                  </div>
+                  {q ? (
+                    <p style={{ color: '#9aa0a6', margin: '8px 0 0', fontSize: 13 }}>
+                      {q.hint}
+                      {q.rttMs != null ? ` · RTT ~${q.rttMs} ms` : ''}
+                      {q.gapsPerMinute != null
+                        ? ` · ~${q.gapsPerMinute} gaps/min`
+                        : ''}
+                    </p>
+                  ) : (
+                    <p style={{ color: '#6e7681', margin: '8px 0 0', fontSize: 13 }}>
+                      Sem telemetria — o músico ainda não abriu o retorno WebSocket.
+                    </p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          <h3 style={{ color: '#e8eaed', marginBottom: 8 }}>Bloco PCM do servidor</h3>
+          <p style={{ color: '#9aa0a6', marginTop: 0 }}>
+            Atual:{' '}
+            <strong style={{ color: '#e8eaed' }}>
+              {audioBlockSamples ?? '—'} amostras @ 48 kHz (~
+              {audioBlockSamples
+                ? ((audioBlockSamples / 48000) * 1000).toFixed(2)
+                : '?'}
+              ms)
+            </strong>
+          </p>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 20 }}>
+            {([64, 128, 256, 512] as const).map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={async () => {
+                  setError(null)
+                  try {
+                    const r = await api<{ audioBlockSamples: number }>(
+                      '/api/audio-engine',
+                      {
+                        method: 'PATCH',
+                        token,
+                        body: JSON.stringify({ audioBlockSamples: n }),
+                      },
+                    )
+                    setAudioBlockSamples(r.audioBlockSamples)
+                  } catch (e) {
+                    setError(String((e as Error).message))
+                  }
+                }}
+                style={{
+                  ...ui.pillBtn,
+                  ...(audioBlockSamples === n ? ui.tabBtnActive : {}),
+                }}
+              >
+                {n} smp
+              </button>
+            ))}
+          </div>
+          <h3 style={{ color: '#e8eaed', marginBottom: 8 }}>Perfil Wi‑Fi (referência)</h3>
           <p style={{ color: '#9aa0a6', maxWidth: 640 }}>
-            2,4 GHz usa blocos maiores (mais latência, mais robustez). 5 GHz /
-            auto usam blocos menores. Documentação em README (projeto).
+            Em palco prefira <strong>5 GHz</strong> dedicado; ligue o servidor por cabo ao
+            access point quando possível.
           </p>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {(['wifi_2_4', 'wifi_5', 'auto'] as const).map((p) => (
@@ -457,11 +1091,8 @@ export function AdminApp() {
                 type="button"
                 onClick={() => saveNetworkProfile(p)}
                 style={{
-                  background: showfile.networkProfile === p ? '#394457' : '#252a33',
-                  color: '#e8eaed',
-                  border: '1px solid #555',
-                  borderRadius: 6,
-                  padding: '8px 14px',
+                  ...ui.pillBtn,
+                  ...(showfile.networkProfile === p ? ui.tabBtnActive : {}),
                 }}
               >
                 {p}
@@ -472,16 +1103,9 @@ export function AdminApp() {
       )}
 
       {showfile && role === 'admin' && tab === 'pairing' && (
-        <section
-          style={{
-            border: '1px solid #2d394d',
-            borderRadius: 18,
-            padding: 18,
-            background: 'linear-gradient(180deg,#171d28 0%,#0f141c 100%)',
-          }}
-        >
+        <section style={ui.panelCard}>
           <h2>Código para músicos</h2>
-          <button type="button" onClick={generatePairing}>
+          <button type="button" onClick={generatePairing} style={ui.pillBtn}>
             Gerar código (6 dígitos)
           </button>
           {pairCode && (
@@ -526,12 +1150,87 @@ export function AdminApp() {
             token={token}
             showfile={showfile}
             musician={selfMusician}
-            onSaved={refreshShowfile}
+            onMusicianStripPatched={mergeMusicianStripIntoShowfile}
           />
         </>
       )}
     </main>
   )
+}
+
+function linearToDb(v: number): string {
+  const clamped = Math.max(0, Math.min(4, Number(v) || 0))
+  if (clamped <= 0.0001) return '-80.0'
+  return (20 * Math.log10(clamped)).toFixed(1)
+}
+
+function sliderFillStyle(value: number, min: number, max: number): CSSProperties {
+  const span = Math.max(1e-9, max - min)
+  const pct = Math.max(0, Math.min(100, ((value - min) / span) * 100))
+  return { '--fill': `${pct}%` } as CSSProperties
+}
+
+function clampLin(v: number, min: number, max: number): number {
+  const n = Number(v)
+  return Math.max(min, Math.min(max, Number.isFinite(n) ? n : min))
+}
+
+function eqBandLabel(k: 'lowDb' | 'midDb' | 'highDb'): 'Low' | 'Mid' | 'High' {
+  if (k === 'lowDb') return 'Low'
+  if (k === 'midDb') return 'Mid'
+  return 'High'
+}
+
+function channelIconGlyph(icon?: string): string {
+  switch (icon) {
+    case 'kick':
+    case 'snare':
+    case 'tom1':
+    case 'tom2':
+    case 'floor':
+    case 'hihat':
+    case 'crash':
+    case 'ride':
+      return '🥁'
+    case 'overhead':
+    case 'mic':
+      return '🎙'
+    case 'bass':
+    case 'guitar':
+      return '🎸'
+    case 'keys':
+      return '🎹'
+    case 'vocal':
+      return '🎤'
+    case 'click':
+      return '⏱'
+    case 'track':
+      return '🎵'
+    default:
+      return '🎚'
+  }
+}
+
+function eqKnobStyle(value: number, min: number, max: number): CSSProperties {
+  const span = Math.max(1e-9, max - min)
+  const pct = Math.max(0, Math.min(100, ((value - min) / span) * 100))
+  const angle = -130 + pct * 2.6
+  return {
+    '--knob-fill': `${pct}%`,
+    '--knob-angle': `${angle}deg`,
+  } as CSSProperties
+}
+
+function gainFaderMarks(maxGain: number): string[] {
+  if (maxGain > 1.0001) return ['+12 dB', '+6', '0', '-12', '-80']
+  return ['0 dB', '-6', '-12', '-24', '-80']
+}
+
+function vuFillFromGain(gain: number, minGain: number, maxGain: number): CSSProperties {
+  const g = clampLin(gain, minGain, maxGain)
+  const span = Math.max(1e-9, maxGain - minGain)
+  const pct = ((g - minGain) / span) * 100
+  return { '--vuFill': `${pct}%` } as CSSProperties
 }
 
 type CaptureInputMatrix = {
@@ -543,6 +1242,8 @@ type CaptureInputMatrix = {
 
 type AudioCaptureDevicesRes = {
   platform: string
+  ffmpegFound?: boolean
+  usingBundledWinFfmpeg?: boolean
   ffprobeFound?: boolean
   devices: {
     index: number
@@ -550,7 +1251,7 @@ type AudioCaptureDevicesRes = {
     inputChannels: number | null
     probeError?: string | null
   }[]
-  captureSource: 'env' | 'avfoundation' | 'none'
+  captureSource: 'env' | 'avfoundation' | 'dshow' | 'none'
   captureMode: 'auto' | 'manual' | 'off'
   manualAvfoundationAudioIndex: number | null
   effectiveAvfoundationAudioIndex: number | null
@@ -771,7 +1472,7 @@ function MacAudioInputsPanel({
   if (!data) {
     return (
       <section>
-        <h2>Entrada de áudio no Mac (AVFoundation)</h2>
+        <h2>Entrada de áudio do desktop</h2>
         <p>A carregar…</p>
       </section>
     )
@@ -779,17 +1480,18 @@ function MacAudioInputsPanel({
 
   return (
     <section>
-      <h2>Entrada de áudio no Mac (AVFoundation)</h2>
+      <h2>Entrada de áudio do desktop (Windows/macOS)</h2>
       <p style={{ color: '#9aa0a6', maxWidth: 720 }}>
-        O servidor <strong>lista as entradas</strong> com o <code>ffmpeg</code> e, em modo{' '}
-        <strong>automático</strong>, tenta reconhecer interfaces comuns (ex.{' '}
-        <strong>STUDIO M</strong>, Focusrite, Zoom, BlackHole…). Para várias interfaces
-        ao mesmo tempo, cria um <strong>dispositivo agregado</strong> no Utilitário Áudio
-        MIDI do macOS e escolhe-o aqui; define o <strong>número de canais (N)</strong> do
-        agregado e sincroniza a mesa. Opcional:{' '}
-        <code>INEAR_CAPTURE_DEVICE_SUBSTRING=nome</code>. Estado em <code>inear-state.json</code>
-        . Se <code>INEAR_CAPTURE_CMD</code> existir, tem prioridade — o teu comando deve
-        usar o mesmo <code>-ac N</code> que o N configurado.
+        O servidor <strong>lista as entradas</strong> com o <code>ffmpeg</code>: no{' '}
+        <strong>macOS</strong> via AVFoundation; no <strong>Windows</strong> via DirectShow
+        (<code>dshow</code>). Em modo <strong>automático</strong>, tenta reconhecer interfaces
+        comuns (ex. Focusrite, Zoom, VB-Audio/CABLE, microfone USB…). No macOS, para várias
+        interfaces ao mesmo tempo, cria um <strong>dispositivo agregado</strong> no Utilitário
+        Áudio MIDI e escolhe-o aqui; define o <strong>número de canais (N)</strong> e sincroniza
+        a mesa. Opcional: <code>INEAR_CAPTURE_DEVICE_SUBSTRING=nome</code>. Estado em{' '}
+        <code>inear-state.json</code>. Se <code>INEAR_CAPTURE_CMD</code> existir, tem prioridade
+        — o teu comando deve usar o mesmo <code>-ac N</code> que o N configurado. No Windows,
+        instala o <code>ffmpeg</code> completo no PATH (ou <code>INEAR_FFMPEG</code>).
       </p>
       {data.platform === 'darwin' && data.captureSource !== 'env' ? (
         <div
@@ -863,9 +1565,10 @@ function MacAudioInputsPanel({
           {loadHint}
         </p>
       ) : null}
-      {data.platform !== 'darwin' ? (
+      {data.platform !== 'darwin' && data.platform !== 'win32' ? (
         <p style={{ color: '#bdc1c6' }}>
-          O servidor não está em macOS — não há lista AVFoundation nesta máquina.
+          Esta plataforma não suporta lista nativa de entradas (usa macOS ou Windows, ou{' '}
+          <code>INEAR_CAPTURE_CMD</code>).
         </p>
       ) : null}
       {data.captureSource === 'env' ? (
@@ -880,9 +1583,12 @@ function MacAudioInputsPanel({
           <code>[{data.suggestedDevice.index}]</code> {data.suggestedDevice.name}
         </p>
       ) : null}
-      {data.captureSource === 'avfoundation' ? (
+      {data.captureSource === 'avfoundation' || data.captureSource === 'dshow' ? (
         <p style={{ marginTop: 12 }}>
           <strong>Captura ativa:</strong>{' '}
+          {data.captureSource === 'dshow' ? (
+            <span style={{ color: '#9aa0a6' }}>DirectShow · </span>
+          ) : null}
           {data.effectiveDeviceName != null
             ? `[${data.effectiveAvfoundationAudioIndex}] ${data.effectiveDeviceName}`
             : `índice :${data.effectiveAvfoundationAudioIndex}`}
@@ -905,11 +1611,12 @@ function MacAudioInputsPanel({
             </span>
           ) : null}
         </p>
-      ) : data.platform === 'darwin' && data.captureSource === 'none' ? (
+      ) : (data.platform === 'darwin' || data.platform === 'win32') &&
+        data.captureSource === 'none' ? (
         <p style={{ marginTop: 12, color: '#9aa0a6' }}>
-          Sem entrada AVFoundation resolvida (modo <code>{data.captureMode}</code>
+          Sem entrada de áudio nativa resolvida (modo <code>{data.captureMode}</code>
           {data.captureMode === 'auto'
-            ? ' — nenhum dispositivo correspondeu à heurística'
+            ? ' — nenhum dispositivo correspondeu à heurística ou lista vazia'
             : ''}
           ). O mix usa tons de teste ou define <code>INEAR_CAPTURE_CMD</code>.
         </p>
@@ -918,6 +1625,30 @@ function MacAudioInputsPanel({
         <p style={{ color: '#f28b82', marginTop: 8 }}>
           Lista vazia ou <code>ffmpeg</code> não encontrado no PATH do processo Electron.
           Instala com <code>brew install ffmpeg</code> ou define <code>INEAR_FFMPEG</code>.
+        </p>
+      ) : null}
+      {data.platform === 'win32' && data.usingBundledWinFfmpeg ? (
+        <p style={{ color: '#81c995', marginTop: 8, maxWidth: 820 }}>
+          O instalador inclui <code>ffmpeg</code> / <code>ffprobe</code> para DirectShow (não dependes
+          do PATH do sistema).
+        </p>
+      ) : null}
+      {data.devices.length === 0 && data.platform === 'win32' && data.ffmpegFound === false ? (
+        <p style={{ color: '#f28b82', marginTop: 8, maxWidth: 820, lineHeight: 1.55 }}>
+          <strong>ffmpeg não encontrado.</strong> Na build oficial corre{' '}
+          <code>npm run dist:win</code> (descarrega binários para o instalador). Em desenvolvimento,
+          corre <code>node scripts/download-ffmpeg-windows.cjs</code> na pasta{' '}
+          <code>apps/desktop-server</code>, ou instala FFmpeg no PATH / define{' '}
+          <code>INEAR_FFMPEG</code> e <code>INEAR_FFPROBE</code>.
+        </p>
+      ) : null}
+      {data.devices.length === 0 &&
+      data.platform === 'win32' &&
+      data.ffmpegFound === true ? (
+        <p style={{ color: '#f28b82', marginTop: 8, maxWidth: 820, lineHeight: 1.55 }}>
+          <strong>ffmpeg encontrado</strong>, mas a lista DirectShow veio vazia. Confirma: permissões
+          de microfone em Definições → Privacidade → Microfone; drivers de áudio atualizados; nenhum
+          outro programa a bloquear o dispositivo exclusivamente. Tenta &quot;Atualizar lista&quot;.
         </p>
       ) : null}
       {data.devices.length > 0 ? (
@@ -1028,7 +1759,9 @@ function MacAudioInputsPanel({
           </p>
         </div>
       ) : null}
-      {canEdit && data.platform === 'darwin' && data.captureSource !== 'env' ? (
+      {canEdit &&
+      (data.platform === 'darwin' || data.platform === 'win32') &&
+      data.captureSource !== 'env' ? (
         <div style={{ marginTop: 20, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             Usar entrada
@@ -1170,9 +1903,10 @@ function MacAudioInputsPanel({
                   </span>
                 ) : null}
                 <input
+                  className="inearRange"
                   type="range"
                   min={0}
-                  max={4}
+                  max={1}
                   step={0.01}
                   disabled={!canEdit}
                   value={gainByIndex[String(i)] ?? 1}
@@ -1182,10 +1916,23 @@ function MacAudioInputsPanel({
                       [String(i)]: Number(e.target.value),
                     }))
                   }
-                  style={{ display: 'block', width: '100%', maxWidth: 420, marginTop: 4 }}
+                  style={{
+                    ...sliderFillStyle(gainByIndex[String(i)] ?? 1, 0, 1),
+                    display: 'block',
+                    width: '100%',
+                    maxWidth: 420,
+                    marginTop: 6,
+                  }}
                 />
+                <div className="faderMarks">
+                  <span>-80</span>
+                  <span>-24</span>
+                  <span>-12</span>
+                  <span>-6</span>
+                  <span>0 dB</span>
+                </div>
                 <span style={{ fontSize: 12, color: '#9aa0a6' }}>
-                  {(gainByIndex[String(i)] ?? 1).toFixed(2)}
+                  {linearToDb(gainByIndex[String(i)] ?? 1)} dB
                 </span>
               </label>
             ))}
@@ -1219,14 +1966,172 @@ function parseJwtSub(token: string): string {
   }
 }
 
+function DeskVolumeStrip({
+  gain,
+  meterTitle = 'Volume',
+  onCommit,
+  rangeMin = 0,
+  rangeMax = 4,
+}: {
+  gain: number
+  meterTitle?: string
+  onCommit: (value: number) => Promise<void>
+  rangeMin?: number
+  rangeMax?: number
+}) {
+  const rowRef = useRef<HTMLDivElement | null>(null)
+  const [faderLenPx, setFaderLenPx] = useState(163)
+  const [local, setLocal] = useState(() => clampLin(gain, rangeMin, rangeMax))
+  const dragRef = useRef(false)
+  const commitRef = useRef(false)
+  const detachWindowPointerRef = useRef<(() => void) | null>(null)
+
+  const attachWindowPointerEnd = () => {
+    detachWindowPointerRef.current?.()
+    const fin = () => {
+      dragRef.current = false
+      window.removeEventListener('pointerup', fin)
+      window.removeEventListener('pointercancel', fin)
+      detachWindowPointerRef.current = null
+    }
+    window.addEventListener('pointerup', fin)
+    window.addEventListener('pointercancel', fin)
+    detachWindowPointerRef.current = () => {
+      window.removeEventListener('pointerup', fin)
+      window.removeEventListener('pointercancel', fin)
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      detachWindowPointerRef.current?.()
+      detachWindowPointerRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    if (dragRef.current || commitRef.current) return
+    setLocal(clampLin(gain, rangeMin, rangeMax))
+  }, [gain, rangeMin, rangeMax])
+
+  useLayoutEffect(() => {
+    const el = rowRef.current
+    if (!el) return
+
+    const measure = () => {
+      const h = el.getBoundingClientRect().height
+      const cs = window.getComputedStyle(el)
+      const padY = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)
+      const usable = Math.max(0, h - padY)
+      const next = Math.round(Math.max(125, Math.min(546, usable)))
+      setFaderLenPx(next)
+    }
+
+    measure()
+    const ro = new ResizeObserver(() => measure())
+    ro.observe(el)
+    window.addEventListener('resize', measure)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', measure)
+    }
+  }, [])
+
+  return (
+    <div className="volCard" style={{ ['--faderLen' as string]: `${faderLenPx}px` } as CSSProperties}>
+      <div className="volCard__title">{meterTitle}</div>
+      <div className="volCard__db">
+        <span>{linearToDb(Number(local))} dB</span>
+      </div>
+      <div ref={rowRef} className="volCard__row">
+        <div className="volCard__vuCol">
+          <div className="volCard__vuFrame">
+            <div className="volCard__vuLabel">VU</div>
+            <div className="volCard__vuMeterRow">
+              <div className="volCard__vuMeter" style={vuFillFromGain(local, rangeMin, rangeMax)} />
+              <div className="volCard__marks">
+                {gainFaderMarks(rangeMax).map((mark) => (
+                  <span key={mark}>{mark}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="volCard__fader">
+          <input
+            className="inearVRange"
+            type="range"
+            min={rangeMin}
+            max={rangeMax}
+            step={0.01}
+            value={local}
+            style={{
+              ...sliderFillStyle(local, rangeMin, rangeMax),
+              width: faderLenPx,
+              position: 'absolute',
+              left: '50%',
+              top: '50%',
+              margin: 0,
+              transform: 'translate(-50%, -50%) rotate(-90deg)',
+            }}
+            onPointerDown={() => {
+              dragRef.current = true
+              attachWindowPointerEnd()
+            }}
+            onChange={async (e) => {
+              const v = clampLin(Number(e.target.value), rangeMin, rangeMax)
+              setLocal(v)
+              commitRef.current = true
+              try {
+                await onCommit(v)
+              } finally {
+                commitRef.current = false
+              }
+            }}
+          />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ChannelVolumeStrip({
+  token,
+  channelId,
+  gain,
+  onChannelStripPatched,
+}: {
+  token: string
+  channelId: string
+  gain: number
+  onChannelStripPatched?: (ch: ChannelStrip) => void
+}) {
+  return (
+    <DeskVolumeStrip
+      gain={gain}
+      meterTitle="Volume"
+      onCommit={async (v) => {
+        const ch = await api<ChannelStrip>(`/api/showfile/channel/${channelId}`, {
+          method: 'PATCH',
+          token,
+          body: JSON.stringify({ gain: v }),
+        })
+        onChannelStripPatched?.(ch)
+      }}
+    />
+  )
+}
+
 function ChannelTable({
   token,
   showfile,
   onSaved,
+  onChannelStripPatched,
 }: {
   token: string
   showfile: Showfile
   onSaved: () => void
+  onChannelStripPatched?: (ch: ChannelStrip) => void
 }) {
   const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({})
   const [iconDrafts, setIconDrafts] = useState<Record<string, string>>({})
@@ -1269,10 +2174,10 @@ function ChannelTable({
       <section style={{ maxWidth: 640 }}>
         <h2 style={{ marginTop: 0 }}>Canais (0)</h2>
         <p style={{ color: '#e8eaed', lineHeight: 1.5 }}>
-          Ainda não há faixas da mesa neste projeto. Ligue a captura (Entrada Mac ou{' '}
+          Ainda não há faixas da mesa neste projeto. Ligue a captura (Entrada de áudio ou{' '}
           <code>INEAR_CAPTURE_CMD</code>) e use{' '}
           <strong>Sincronizar faixas</strong> em <strong>Sessão</strong> ou{' '}
-          <strong>Entrada Mac</strong> (define N) — surgem <code>if_0</code>… com faders
+          <strong>Entrada de áudio</strong> (define N) — surgem <code>if_0</code>… com faders
           gain/pan/EQ aqui.
         </p>
         <button type="button" onClick={() => onSaved()}>
@@ -1282,54 +2187,48 @@ function ChannelTable({
     )
   }
   return (
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-        gap: 14,
-      }}
-    >
+    <div style={{ minWidth: 0, maxWidth: '100%', width: '100%' }}>
+    <div className="chBoardShell">
+      <div className="chBoard">
       {showfile.channels.map((ch) => {
         const accent = channelAccentColor(ch)
-        const verticalSliderStyle = {
-          width: 150,
-          transform: 'rotate(-90deg)',
-        }
+        const srcLabel =
+          typeof ch.captureInputIndex === 'number'
+            ? `PCM ${ch.captureInputIndex}`
+            : ch.sourceTap === 'L'
+              ? 'PCM L'
+              : ch.sourceTap === 'R'
+                ? 'PCM R'
+                : ch.sourceTap === 'sum'
+                  ? 'Soma'
+                  : (ch.sourceTap ?? '—')
         return (
           <div
             key={ch.id}
-            style={{
+            className="chCard"
+            style={
+              {
               border: `1px solid ${accent}`,
-              borderRadius: 16,
-              padding: 14,
-              background: 'linear-gradient(180deg,#1a212d 0%,#11161f 100%)',
-              boxShadow: '0 10px 24px rgba(0,0,0,.22)',
-            }}
+                ['--ch-accent' as string]: accent,
+              } as CSSProperties
+            }
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
-              <div
-                style={{
-                  width: 44,
-                  height: 44,
-                  borderRadius: 12,
-                  background: accent,
-                  color: '#07111a',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontWeight: 900,
-                }}
-              >
-                {channelIconBadge(ch.icon)}
+            <div className="chCard__hdr">
+              <div className={`chCard__badge${ch.mute ? ' chCard__badge--muted' : ''}`} style={{ background: accent }}>
+                {channelIconGlyph(ch.icon)}
               </div>
-              <div style={{ flex: 1 }}>
-                <strong style={{ display: 'block', fontSize: 16 }}>{ch.name}</strong>
-                <small style={{ color: '#9aa0a6' }}>{ch.id}</small>
+              <div className="chCard__titles">
+                <strong>{ch.name}</strong>
+                <small>
+                  {ch.id}
+                  <span style={{ color: '#6e7681' }}> · </span>
+                  {srcLabel}
+                </small>
               </div>
             </div>
 
-            <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
               <input
+              className="deskField"
                 value={nameFor(ch.id, ch.name)}
                 onChange={(e) =>
                   setNameDrafts((prev) => ({
@@ -1337,18 +2236,13 @@ function ChannelTable({
                     [ch.id]: e.target.value,
                   }))
                 }
-                placeholder={ch.id}
-                style={{
-                  width: '100%',
-                  padding: '8px 10px',
-                  background: '#252a33',
-                  color: '#e8eaed',
-                  border: '1px solid #555',
-                  borderRadius: 8,
-                }}
-              />
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 92px', gap: 8 }}>
+              placeholder="Nome do canal"
+            />
+
+            <div className="deskMiniRow">
                 <select
+                className="deskSelect"
+                style={{ flex: 1, minWidth: 0 }}
                   value={iconFor(ch.id, ch.icon)}
                   onChange={(e) =>
                     setIconDrafts((prev) => ({
@@ -1356,13 +2250,6 @@ function ChannelTable({
                       [ch.id]: e.target.value,
                     }))
                   }
-                  style={{
-                    padding: '8px 10px',
-                    background: '#252a33',
-                    color: '#e8eaed',
-                    border: '1px solid #555',
-                    borderRadius: 8,
-                  }}
                 >
                   <option value="">Icone padrao</option>
                   {CHANNEL_ICON_OPTIONS.map((opt) => (
@@ -1372,6 +2259,7 @@ function ChannelTable({
                   ))}
                 </select>
                 <input
+                className="deskColor"
                   type="color"
                   value={colorFor(ch.id, ch.color, ch.captureInputIndex)}
                   onChange={(e) =>
@@ -1380,18 +2268,16 @@ function ChannelTable({
                       [ch.id]: e.target.value,
                     }))
                   }
-                  style={{
-                    width: '100%',
-                    height: 42,
-                    background: 'transparent',
-                    border: '1px solid #555',
-                    borderRadius: 8,
-                  }}
+                aria-label="Cor do canal"
+                title="Cor do canal"
                 />
               </div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+
+            <div className="deskMiniRow" style={{ justifyContent: 'space-between' }}>
                 <button
                   type="button"
+                className="deskBtn"
+                title="Salvar nome, ícone e cor"
                   onClick={async () => {
                     await saveChannelVisuals(
                       ch.id,
@@ -1401,9 +2287,15 @@ function ChannelTable({
                     )
                   }}
                 >
-                  Salvar visual
+                Salvar
                 </button>
-                <label style={{ color: '#e8eaed' }}>
+
+              <label className={`deskMute${ch.mute ? ' deskMute--on' : ''}`}>
+                <span className="deskMute__led" aria-hidden="true" />
+                <span className="deskMute__toggle" aria-hidden="true">
+                  {ch.mute ? '🔇' : '🔊'}
+                  <span className="deskMute__toggleDot" />
+                </span>
                   <input
                     type="checkbox"
                     checked={ch.mute}
@@ -1415,73 +2307,78 @@ function ChannelTable({
                       })
                       onSaved()
                     }}
-                  />{' '}
-                  mute
+                />
+                MUTE
                 </label>
-              </div>
             </div>
 
-            <small style={{ color: '#9aa0a6', display: 'block', marginBottom: 12 }}>
-              {typeof ch.captureInputIndex === 'number'
-                ? `Entrada PCM ${ch.captureInputIndex}`
-                : ch.sourceTap === 'L'
-                  ? 'PCM L'
-                  : ch.sourceTap === 'R'
-                    ? 'PCM R'
-                    : ch.sourceTap === 'sum'
-                      ? 'Soma'
-                      : (ch.sourceTap ?? '—')}
-            </small>
+            <label className={`deskLatch${ch.lockEq ? ' deskLatch--on' : ''}`}>
+              <span className="deskLatch__led" aria-hidden="true" />
+              <input
+                type="checkbox"
+                checked={ch.lockEq}
+                onChange={async (e) => {
+                  await api(`/api/showfile/channel/${ch.id}`, {
+                    method: 'PATCH',
+                    token,
+                    body: JSON.stringify({ lockEq: e.target.checked }),
+                  })
+                  onSaved()
+                }}
+              />
+              Bloquear canais
+            </label>
 
-            <div style={{ display: 'flex', gap: 18, alignItems: 'flex-end' }}>
-              {[
-                { key: 'gain', label: 'Gain', min: 0, max: 4, step: 0.01, value: ch.gain },
-                { key: 'pan', label: 'Pan', min: -1, max: 1, step: 0.01, value: ch.pan },
-              ].map((slider) => (
-                <label
-                  key={slider.key}
-                  style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}
-                >
-                  <span style={{ fontSize: 12, color: '#c9d1d9', fontWeight: 700 }}>{slider.label}</span>
-                  <div style={{ width: 28, height: 170, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div className="panInline" style={{ margin: '0 0 5px', maxWidth: '100%', width: '100%' }}>
+              <div className="panInline__head">
+                <span>Pan</span>
+                <span>{ch.pan.toFixed(2)}</span>
+              </div>
                     <input
+                className="inearRange"
                       type="range"
-                      min={slider.min}
-                      max={slider.max}
-                      step={slider.step}
-                      value={slider.value}
-                      style={verticalSliderStyle}
+                min={-1}
+                max={1}
+                step={0.01}
+                value={ch.pan}
+                style={{ ...sliderFillStyle(ch.pan, -1, 1), width: '100%' }}
                       onChange={async (e) => {
                         await api(`/api/showfile/channel/${ch.id}`, {
                           method: 'PATCH',
                           token,
                           body: JSON.stringify({
-                            [slider.key]: Number(e.target.value),
+                      pan: Number(e.target.value),
                           }),
                         })
                         onSaved()
                       }}
                     />
+              <div className="panInline__scale">
+                <span>(L)</span>
+                <span>|</span>
+                <span>(R)</span>
                   </div>
-                  <small style={{ color: '#8b949e' }}>{Number(slider.value).toFixed(2)}</small>
-                </label>
-              ))}
-              {(['lowDb', 'midDb', 'highDb'] as const).map((k) => (
-                <label
-                  key={k}
-                  style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}
-                >
-                  <span style={{ fontSize: 12, color: '#c9d1d9', fontWeight: 700 }}>
-                    {k === 'lowDb' ? 'Low' : k === 'midDb' ? 'Mid' : 'High'}
-                  </span>
-                  <div style={{ width: 28, height: 170, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            </div>
+
+            <div className="chCard__mixRow">
+              <ChannelVolumeStrip
+                token={token}
+                channelId={ch.id}
+                gain={ch.gain}
+                onChannelStripPatched={onChannelStripPatched}
+              />
+              <div className="eqKnobCol">
+                {(['highDb', 'midDb', 'lowDb'] as const).map((k) => (
+                  <div key={k} className="eqKnob">
+                    <div className="eqKnob__label">{eqBandLabel(k)}</div>
+                    <div className="eqKnob__dial" style={eqKnobStyle(ch.eq[k], -12, 12)}>
                     <input
+                        className="eqKnob__input"
                       type="range"
                       min={-12}
                       max={12}
                       step={0.5}
                       value={ch.eq[k]}
-                      style={verticalSliderStyle}
                       onChange={async (e) => {
                         await api(`/api/showfile/channel/${ch.id}`, {
                           method: 'PATCH',
@@ -1494,29 +2391,16 @@ function ChannelTable({
                       }}
                     />
                   </div>
-                  <small style={{ color: '#8b949e' }}>{ch.eq[k].toFixed(1)} dB</small>
-                </label>
+                    <div className="eqKnob__value">{ch.eq[k].toFixed(1)} dB</div>
+                  </div>
               ))}
             </div>
-
-            <label style={{ display: 'block', marginTop: 12, color: '#e8eaed' }}>
-              <input
-                type="checkbox"
-                checked={ch.lockEq}
-                onChange={async (e) => {
-                  await api(`/api/showfile/channel/${ch.id}`, {
-                    method: 'PATCH',
-                    token,
-                    body: JSON.stringify({ lockEq: e.target.checked }),
-                  })
-                  onSaved()
-                }}
-              />{' '}
-              bloquear EQ do musico
-            </label>
+            </div>
           </div>
         )
       })}
+      </div>
+    </div>
     </div>
   )
 }
@@ -1525,11 +2409,49 @@ function MusicianTable({
   showfile,
   token,
   onSaved,
+  onMusicianStripPatched,
 }: {
   showfile: Showfile
   token: string
   onSaved: () => void
+  onMusicianStripPatched?: (m: MusicianStrip) => void
 }) {
+  const ui = {
+    card: {
+      border: '1px solid #30445d',
+      borderRadius: 18,
+      padding: 16,
+      background: 'linear-gradient(180deg,#172436 0%,#101a26 100%)',
+      boxShadow: '0 10px 24px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.03)',
+    },
+    input: {
+      width: '100%',
+      padding: '9px 10px',
+      background: '#1a2433',
+      color: '#e8eaed',
+      border: '1px solid #405067',
+      borderRadius: 10,
+      outline: 'none',
+    },
+    btn: {
+      borderRadius: 999,
+      border: '1px solid #4f78a9',
+      background: 'linear-gradient(180deg,#2a4464 0%,#1e334b 100%)',
+      color: '#f0f6fc',
+      padding: '8px 14px',
+      fontWeight: 800,
+      letterSpacing: '.01em',
+    },
+    btnGhost: {
+      borderRadius: 999,
+      border: '1px solid #3f4f66',
+      background: '#1b2431',
+      color: '#c9d1d9',
+      padding: '7px 12px',
+      fontWeight: 700,
+    },
+  } as const
+
   const [selectedMusicianId, setSelectedMusicianId] = useState<string | null>(
     showfile.musicians[0]?.id ?? null,
   )
@@ -1545,14 +2467,7 @@ function MusicianTable({
 
   return (
     <div style={{ display: 'grid', gap: 18 }}>
-      <section
-        style={{
-          border: '1px solid #2d394d',
-          borderRadius: 18,
-          padding: 16,
-          background: 'linear-gradient(180deg,#1a2230 0%,#10161f 100%)',
-        }}
-      >
+      <section style={ui.card}>
         <h2 style={{ marginTop: 0 }}>Cadastrar músico</h2>
         <div
           style={{
@@ -1562,24 +2477,34 @@ function MusicianTable({
             alignItems: 'end',
           }}
         >
-          <label style={{ display: 'grid', gap: 6 }}>
+          <label style={{ display: 'grid', gap: 6, color: '#c9d1d9' }}>
             <span>Nome</span>
-            <input value={newName} onChange={(e) => setNewName(e.target.value)} />
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              style={ui.input}
+            />
           </label>
-          <label style={{ display: 'grid', gap: 6 }}>
+          <label style={{ display: 'grid', gap: 6, color: '#c9d1d9' }}>
             <span>Usuário</span>
-            <input value={newUsername} onChange={(e) => setNewUsername(e.target.value)} />
+            <input
+              value={newUsername}
+              onChange={(e) => setNewUsername(e.target.value)}
+              style={ui.input}
+            />
           </label>
-          <label style={{ display: 'grid', gap: 6 }}>
+          <label style={{ display: 'grid', gap: 6, color: '#c9d1d9' }}>
             <span>Senha</span>
             <input
               type="password"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
+              style={ui.input}
             />
           </label>
           <button
             type="button"
+            style={ui.btn}
             onClick={async () => {
               await api('/api/admin/musicians', {
                 method: 'POST',
@@ -1604,29 +2529,33 @@ function MusicianTable({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'minmax(300px, 380px) 1fr',
+          gridTemplateColumns: 'minmax(300px, 380px) minmax(0, 1fr)',
           gap: 16,
           alignItems: 'start',
+          minWidth: 0,
+          maxWidth: '100%',
         }}
       >
         <section
           style={{
-            border: '1px solid #2d394d',
-            borderRadius: 18,
-            padding: 16,
-            background: 'linear-gradient(180deg,#171d28 0%,#0f141c 100%)',
+            ...ui.card,
+            display: 'flex',
+            flexDirection: 'column',
+            alignSelf: 'start',
+            maxWidth: '100%',
           }}
         >
-          <h2 style={{ marginTop: 0 }}>Perfis de músicos</h2>
-          <div style={{ display: 'grid', gap: 12 }}>
+          <h2 style={{ marginTop: 0, flexShrink: 0 }}>Perfis de músicos</h2>
+          <div className="musicianProfilesScroll">
             {showfile.musicians.map((m) => (
               <div
                 key={m.id}
+                className="musicianProfileCard"
                 style={{
-                  border: selectedMusician?.id === m.id ? '1px solid #58a6ff' : '1px solid #30363d',
-                  borderRadius: 14,
-                  padding: 12,
-                  background: selectedMusician?.id === m.id ? '#132033' : '#11161f',
+                  border: selectedMusician?.id === m.id ? '1px solid #6cb6ff' : '1px solid #33455d',
+                  borderRadius: 12,
+                  padding: '12px 12px 14px',
+                  background: selectedMusician?.id === m.id ? '#13263e' : '#121b28',
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
@@ -1634,17 +2563,22 @@ function MusicianTable({
                     <strong>{m.name}</strong>
                     <div style={{ color: '#9aa0a6', fontSize: 13 }}>{m.username}</div>
                   </div>
-                  <button type="button" onClick={() => setSelectedMusicianId(m.id)}>
+                  <button
+                    type="button"
+                    style={selectedMusician?.id === m.id ? ui.btn : ui.btnGhost}
+                    onClick={() => setSelectedMusicianId(m.id)}
+                  >
                     Abrir mix
                   </button>
                 </div>
-                <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
+                <div style={{ display: 'grid', gap: 9, marginTop: 12 }}>
                   <input
                     value={editName[m.id] ?? m.name}
                     onChange={(e) =>
                       setEditName((prev) => ({ ...prev, [m.id]: e.target.value }))
                     }
                     placeholder="Nome"
+                    style={ui.input}
                   />
                   <input
                     value={editUsername[m.id] ?? m.username}
@@ -1652,6 +2586,7 @@ function MusicianTable({
                       setEditUsername((prev) => ({ ...prev, [m.id]: e.target.value }))
                     }
                     placeholder="Usuário"
+                    style={ui.input}
                   />
                   <input
                     type="password"
@@ -1660,10 +2595,12 @@ function MusicianTable({
                       setEditPassword((prev) => ({ ...prev, [m.id]: e.target.value }))
                     }
                     placeholder="Nova senha (opcional)"
+                    style={ui.input}
                   />
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                     <button
                       type="button"
+                      style={ui.btn}
                       onClick={async () => {
                         await api(`/api/admin/musicians/${m.id}`, {
                           method: 'PATCH',
@@ -1680,17 +2617,20 @@ function MusicianTable({
                     >
                       Salvar perfil
                     </button>
-                    <label style={{ color: '#e8eaed' }}>
+                    <label style={{ color: '#c9d1d9' }}>
                       <input
                         type="checkbox"
                         checked={m.mute}
                         onChange={async (e) => {
-                          await api(`/api/showfile/musician/${m.id}`, {
-                            method: 'PATCH',
-                            token,
-                            body: JSON.stringify({ mute: e.target.checked }),
-                          })
-                          onSaved()
+                          const next = await api<MusicianStrip>(
+                            `/api/showfile/musician/${m.id}`,
+                            {
+                              method: 'PATCH',
+                              token,
+                              body: JSON.stringify({ mute: e.target.checked }),
+                            },
+                          )
+                          onMusicianStripPatched?.(next)
                         }}
                       />{' '}
                       mutar músico
@@ -1702,20 +2642,13 @@ function MusicianTable({
           </div>
         </section>
 
-        <section
-          style={{
-            border: '1px solid #2d394d',
-            borderRadius: 18,
-            padding: 16,
-            background: 'linear-gradient(180deg,#171d28 0%,#0f141c 100%)',
-          }}
-        >
+        <section style={{ ...ui.card, minWidth: 0, maxWidth: '100%', alignSelf: 'start' }}>
           {selectedMusician ? (
             <MusicianControls
               token={token}
               showfile={showfile}
               musician={selectedMusician}
-              onSaved={onSaved}
+              onMusicianStripPatched={onMusicianStripPatched}
             />
           ) : (
             <p style={{ color: '#9aa0a6' }}>Nenhum músico cadastrado.</p>
@@ -1730,12 +2663,12 @@ function MusicianControls({
   token,
   showfile,
   musician,
-  onSaved,
+  onMusicianStripPatched,
 }: {
   token: string
   showfile: Showfile
   musician: Showfile['musicians'][0]
-  onSaved: () => void
+  onMusicianStripPatched?: (m: MusicianStrip) => void
 }) {
   const ids = useMemo(
     () => retornoMixerChannelOrder(showfile, musician),
@@ -1744,139 +2677,191 @@ function MusicianControls({
   const groupIds = musician.scope.groupIds
 
   return (
-    <div>
+    <div style={{ minWidth: 0, maxWidth: '100%' }}>
       <h2 style={{ marginTop: 0 }}>Olá, {musician.name}</h2>
-      <p style={{ color: '#9aa0a6' }}>
-        Sends por canal da interface (e grupos, se existirem). Se não vês nada,
-        pede ao técnico: <strong>Sessão</strong> ou <strong>Entrada Mac</strong> →
-        &quot;Sincronizar faixas&quot; com a captura ativa (N canais no Mac).
-      </p>
-      {ids.length === 0 && (
+      {ids.length === 0 && groupIds.length === 0 && (
         <p style={{ color: '#fbbc04' }}>
           Ainda não há canais no showfile (0). Depois da sincronização no Mac,
           recarrega esta página.
         </p>
       )}
-      {groupIds.map((gid) => {
-        const g = showfile.groups.find((x) => x.id === gid)
-        if (!g) return null
-        return (
-          <label key={gid} style={{ display: 'block', marginBottom: 12 }}>
-            Send {g.name}
-            <input
-              type="range"
-              min={0}
-              max={2}
-              step={0.01}
-              value={musician.sendGains[gid] ?? 1}
-              onChange={async (e) => {
-                await api(`/api/showfile/musician/${musician.id}`, {
-                  method: 'PATCH',
-                  token,
-                  body: JSON.stringify({
-                    sendGains: { [gid]: Number(e.target.value) },
-                  }),
-                })
-                onSaved()
-              }}
-              style={{ width: '100%' }}
-            />
-          </label>
-        )
-      })}
-      {ids.map((cid) => {
-        const ch = showfile.channels.find((c) => c.id === cid)
-        if (!ch) return null
-        const earEq = musician.eqByChannel?.[cid]
-        const eqBase = {
-          lowDb: earEq?.lowDb ?? ch.eq.lowDb,
-          midDb: earEq?.midDb ?? ch.eq.midDb,
-          highDb: earEq?.highDb ?? ch.eq.highDb,
-        }
-        return (
-          <div
-            key={cid}
-            style={{
-              border: '1px solid #333',
-              borderRadius: 8,
-              padding: 12,
-              marginBottom: 12,
-            }}
-          >
-            <div style={{ fontWeight: 600 }}>
-              {ch.name}{' '}
-              {ch.lockEq && (
-                <span style={{ color: '#fbbc04', fontSize: 12 }}>(EQ bloqueado)</span>
-              )}
-            </div>
-            <label style={{ display: 'block' }}>
-              Send
-              <input
-                type="range"
-                min={0}
-                max={2}
-                step={0.01}
-                value={musician.sendGains[cid] ?? 1}
-                onChange={async (e) => {
-                  await api(`/api/showfile/musician/${musician.id}`, {
-                    method: 'PATCH',
-                    token,
-                    body: JSON.stringify({
-                      sendGains: { [cid]: Number(e.target.value) },
-                    }),
-                  })
-                  onSaved()
-                }}
-                style={{ width: '100%' }}
-              />
-            </label>
-            {!ch.lockEq && (
-              <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                {(['lowDb', 'midDb', 'highDb'] as const).map((k) => (
-                  <label key={k} style={{ flex: 1, fontSize: 12 }}>
-                    {k} (teu ouvido)
-                    <input
-                      type="range"
-                      min={-12}
-                      max={12}
-                      step={0.5}
-                      value={eqBase[k]}
-                      onChange={async (e) => {
-                        await api(`/api/showfile/musician/${musician.id}`, {
-                          method: 'PATCH',
-                          token,
-                          body: JSON.stringify({
-                            eqByChannel: {
-                              [cid]: {
-                                ...eqBase,
-                                [k]: Number(e.target.value),
-                              },
-                            },
-                          }),
-                        })
-                        onSaved()
-                      }}
-                      style={{ width: '100%' }}
-                    />
-                  </label>
-                ))}
+      <div className="chBoardShell" style={{ marginTop: 12 }}>
+      <div className="chBoard musicianDeskBoard">
+        {groupIds.map((gid) => {
+          const g = showfile.groups.find((x) => x.id === gid)
+          if (!g) return null
+          const gv = musician.sendGains[gid] ?? 1
+          const muted = musician.sendMutes?.[gid] === true
+          const accent = '#a371f7'
+          const badgeLetter = (g.name.trim().charAt(0) || 'G').toUpperCase()
+          return (
+            <div
+              key={gid}
+              className="chCard"
+              style={
+                {
+                  border: `1px solid ${accent}`,
+                  ['--ch-accent' as string]: accent,
+                } as CSSProperties
+              }
+            >
+              <div className="chCard__hdr">
+                <div className={`chCard__badge${muted ? ' chCard__badge--muted' : ''}`} style={{ background: accent, fontSize: 12 }}>
+                  {badgeLetter}
+                </div>
+                <div className="chCard__titles">
+                  <strong>Grupo</strong>
+                  <small>
+                    {g.name}
+                    <span style={{ color: '#6e7681' }}> · </span>
+                    {gid}
+                  </small>
+                </div>
               </div>
-            )}
-          </div>
-        )
-      })}
-      <button
-        type="button"
-        onClick={async () => {
-          await api('/api/telemetry', {
-            method: 'POST',
-            token,
-            body: JSON.stringify({ gaps: 0, underruns: 0, rttMs: 0 }),
-          })
-        }}
-      >
-        Ping telemetria (teste)
-      </button>
+              <div className="chCard__mixRow chCard__mixRow--soloVol">
+                <DeskVolumeStrip
+                  key={`${musician.id}-g-${gid}`}
+                  gain={gv}
+                  meterTitle="Send"
+                  onCommit={async (v) => {
+                    const next = await api<MusicianStrip>(
+                      `/api/showfile/musician/${musician.id}`,
+                      {
+                        method: 'PATCH',
+                        token,
+                        body: JSON.stringify({ sendGains: { [gid]: v } }),
+                      },
+                    )
+                    onMusicianStripPatched?.(next)
+                  }}
+                />
+              </div>
+            </div>
+          )
+        })}
+        {ids.map((cid) => {
+          const ch = showfile.channels.find((c) => c.id === cid)
+          if (!ch) return null
+          const muted = musician.sendMutes?.[cid] === true
+          const accent = channelAccentColor(ch)
+          const earEq = musician.eqByChannel?.[cid]
+          const eqBase = {
+            lowDb: earEq?.lowDb ?? ch.eq.lowDb,
+            midDb: earEq?.midDb ?? ch.eq.midDb,
+            highDb: earEq?.highDb ?? ch.eq.highDb,
+          }
+          return (
+            <div
+              key={cid}
+              className="chCard"
+              style={
+                {
+                  border: `1px solid ${accent}`,
+                  ['--ch-accent' as string]: accent,
+                } as CSSProperties
+              }
+            >
+              <div className="chCard__hdr">
+                <div className={`chCard__badge${muted ? ' chCard__badge--muted' : ''}`} style={{ background: accent }}>
+                  {channelIconGlyph(ch.icon)}
+                </div>
+                <div className="chCard__titles">
+                  <strong>{ch.name}</strong>
+                  <small>
+                    {cid}
+                    <span style={{ color: '#6e7681' }}> · </span>
+                    send
+                    {ch.lockEq ? (
+                      <span style={{ color: '#fbbc04' }}> · EQ bloqueado</span>
+                    ) : null}
+                  </small>
+                </div>
+              </div>
+              <div className="chCard__mixRow">
+                <DeskVolumeStrip
+                  key={`${musician.id}-s-${cid}`}
+                  gain={musician.sendGains[cid] ?? 1}
+                  meterTitle="Send"
+                  onCommit={async (v) => {
+                    const next = await api<MusicianStrip>(
+                      `/api/showfile/musician/${musician.id}`,
+                      {
+                        method: 'PATCH',
+                        token,
+                        body: JSON.stringify({ sendGains: { [cid]: v } }),
+                      },
+                    )
+                    onMusicianStripPatched?.(next)
+                  }}
+                />
+                {ch.lockEq ? (
+                  <div
+                    className="eqKnobCol"
+                    style={{
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      opacity: 0.85,
+                      minHeight: 80,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 10,
+                        color: '#8b949e',
+                        textAlign: 'center',
+                        lineHeight: 1.35,
+                        padding: '4px 2px',
+                      }}
+                    >
+                      EQ definido
+                      <br />
+                      pelo técnico
+                    </span>
+                  </div>
+                ) : (
+                  <div className="eqKnobCol">
+                    {(['highDb', 'midDb', 'lowDb'] as const).map((k) => (
+                      <div key={k} className="eqKnob">
+                        <div className="eqKnob__label">{eqBandLabel(k)}</div>
+                        <div className="eqKnob__dial" style={eqKnobStyle(eqBase[k], -12, 12)}>
+                          <input
+                            className="eqKnob__input"
+                            type="range"
+                            min={-12}
+                            max={12}
+                            step={0.5}
+                            value={eqBase[k]}
+                            onChange={async (e) => {
+                              const next = await api<MusicianStrip>(
+                                `/api/showfile/musician/${musician.id}`,
+                                {
+                                  method: 'PATCH',
+                                  token,
+                                  body: JSON.stringify({
+                                    eqByChannel: {
+                                      [cid]: {
+                                        ...eqBase,
+                                        [k]: Number(e.target.value),
+                                      },
+                                    },
+                                  }),
+                                },
+                              )
+                              onMusicianStripPatched?.(next)
+                            }}
+                          />
+                        </div>
+                        <div className="eqKnob__value">{eqBase[k].toFixed(1)} dB</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+      </div>
     </div>
   )
 }

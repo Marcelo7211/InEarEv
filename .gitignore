@@ -6,3 +6,7 @@ out/
 .env
 .env.*
 !.env.example
+
+# FFmpeg empacotado só no build Windows (binários grandes)
+apps/desktop-server/resources/ffmpeg-win/*.exe
+apps/desktop-server/.cache/

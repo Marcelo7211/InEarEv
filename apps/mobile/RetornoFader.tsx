@@ -23,8 +23,15 @@ export function RetornoFader({
   const [local, setLocal] = useState(value)
   const [trackW, setTrackW] = useState(1)
   const startVRef = useRef(value)
+  const localRef = useRef(value)
+  const draggingRef = useRef(false)
+  const onCommitRef = useRef(onCommit)
+
+  localRef.current = local
+  onCommitRef.current = onCommit
 
   useEffect(() => {
+    if (draggingRef.current) return
     setLocal(value)
   }, [value])
 
@@ -36,7 +43,7 @@ export function RetornoFader({
     const span = max - min
     const v = clamp(startVRef.current + (dx / trackW) * span)
     setLocal(v)
-    onCommit(v)
+    onCommitRef.current(v)
   }
 
   const panResponder = useMemo(
@@ -45,13 +52,20 @@ export function RetornoFader({
         onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: () => true,
         onPanResponderGrant: () => {
-          startVRef.current = local
+          draggingRef.current = true
+          startVRef.current = localRef.current
         },
         onPanResponderMove: (_e, gestureState) => {
           setFromDx(gestureState.dx)
         },
+        onPanResponderRelease: () => {
+          draggingRef.current = false
+        },
+        onPanResponderTerminate: () => {
+          draggingRef.current = false
+        },
       }),
-    [local],
+    [trackW, min, max],
   )
 
   const pct = (local - min) / (max - min)
@@ -114,12 +128,12 @@ const s = StyleSheet.create({
   wrap: { width: '100%' },
   track: {
     height: 36,
-    borderRadius: 10,
-    backgroundColor: '#151b24',
+    borderRadius: 12,
+    backgroundColor: '#0f1621',
     overflow: 'hidden',
     marginBottom: 6,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#30363d',
+    borderWidth: 1,
+    borderColor: '#2c394d',
   },
   trackCompact: {
     height: 22,
@@ -132,14 +146,14 @@ const s = StyleSheet.create({
     top: 7,
     bottom: 7,
     borderRadius: 999,
-    backgroundColor: '#1b2431',
+    backgroundColor: '#172232',
   },
   fill: {
     position: 'absolute',
     left: 6,
     top: 7,
     bottom: 7,
-    backgroundColor: '#238636',
+    backgroundColor: '#2ea043',
     borderRadius: 999,
   },
   thumb: {
@@ -148,10 +162,10 @@ const s = StyleSheet.create({
     marginLeft: -10,
     width: 20,
     height: 28,
-    borderRadius: 9,
-    backgroundColor: '#c4ccd6',
+    borderRadius: 10,
+    backgroundColor: '#d6dce6',
     borderWidth: 1,
-    borderColor: '#6a7381',
+    borderColor: '#7d8796',
   },
   row: {
     flexDirection: 'row',
@@ -164,8 +178,10 @@ const s = StyleSheet.create({
     minWidth: 40,
     paddingVertical: 6,
     paddingHorizontal: 10,
-    backgroundColor: '#30363d',
-    borderRadius: 6,
+    backgroundColor: '#1c2736',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#314258',
   },
   stepBtnCompact: {
     minWidth: 26,
@@ -174,6 +190,6 @@ const s = StyleSheet.create({
   },
   stepTxt: { color: '#e6edf3', fontSize: 18, fontWeight: '700' },
   stepTxtCompact: { fontSize: 12 },
-  val: { color: '#8b949e', fontSize: 12, minWidth: 44, textAlign: 'center' },
+  val: { color: '#9eb0c7', fontSize: 12, minWidth: 44, textAlign: 'center' },
   valCompact: { fontSize: 10, minWidth: 28 },
 })

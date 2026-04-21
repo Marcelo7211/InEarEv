@@ -4,7 +4,7 @@ import {
   channelIconBadge,
   retornoMixerChannelOrder,
 } from '@inear/protocol'
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ScrollView,
   StyleSheet,
@@ -42,22 +42,6 @@ function pcmIndexFromChannel(ch: ChannelStrip): number | null {
     return Number.isFinite(n) ? Math.floor(n) : null
   }
   return null
-}
-
-function levelToDb(level: number): number {
-  const safe = Math.max(1e-4, level)
-  return Math.max(-80, Math.min(6, 20 * Math.log10(safe)))
-}
-
-function dbToVuFill(db: number): `${number}%` {
-  const pct = ((db + 80) / 86) * 100
-  return `${Math.max(0, Math.min(100, Math.round(pct)))}%` as `${number}%`
-}
-
-function eqGainLinear(eq: Eq3): number {
-  const avg = (eq.lowDb + eq.midDb + eq.highDb) / 3
-  const adb = Math.max(-6, Math.min(6, avg))
-  return 10 ** (adb / 20)
 }
 
 function lightenHexColor(hex: string, amount = 0.46): string {
@@ -104,152 +88,26 @@ function stripTitles(ch: ChannelStrip): { primary: string; secondary: string } {
   return { primary: ch.name, secondary: legacySubtitle() }
 }
 
-type ChannelStripProps = {
-  ch: ChannelStrip
-  send: number
-  eqLow: number
-  eqMid: number
-  eqHigh: number
-  inputLevel?: number
-  accentColor: string
-  sendMuted: boolean
-  lockEq: boolean
-  onSend: (v: number) => void
-  onSendLive?: (v: number) => void
-  onToggleMute: () => void
-  onEqBand: (band: keyof Eq3, v: number) => void
+export type NetworkQualityUi = {
+  level: 'good' | 'warn' | 'bad'
+  rttMs: number | null
+  jitterMs?: number | null
+  gapsPerMinute?: number
+  hint?: string
 }
 
-const RetornoMixerChannelStrip = memo(function RetornoMixerChannelStrip({
-  ch,
-  send,
-  eqLow,
-  eqMid,
-  eqHigh,
-  inputLevel = 0,
-  accentColor,
-  sendMuted,
-  lockEq,
-  onSend,
-  onSendLive,
-  onToggleMute,
-  onEqBand,
-}: ChannelStripProps) {
-  const { primary, secondary } = stripTitles(ch)
-  const effectiveEq = { lowDb: eqLow, midDb: eqMid, highDb: eqHigh }
-  const channelOpen = ch.mute || sendMuted ? 0 : 1
-  const effectiveLevel = Math.max(
-    0,
-    Math.min(
-      1,
-      Math.max(
-        inputLevel * 1.6 * channelOpen,
-        inputLevel * ch.gain * send * eqGainLinear(effectiveEq) * 1.8 * channelOpen,
-      ),
-    ),
-  )
-  const outputDb = levelToDb(effectiveLevel)
-  const vuFill = dbToVuFill(outputDb)
-  const vuColor =
-    outputDb > -6 ? '#f85149' : outputDb > -18 ? '#d29922' : '#2ea043'
-  const badge = channelIconBadge(ch.icon)
-  const iconBg = sendMuted ? lightenHexColor(accentColor, 0.48) : accentColor
-  return (
-    <View
-      style={[
-        s.strip,
-        {
-          borderColor: accentColor,
-          backgroundColor: sendMuted ? '#131821' : '#171d28',
-          opacity: ch.mute ? 0.56 : 1,
-        },
-      ]}
-    >
-      <ScrollView
-        nestedScrollEnabled
-        showsVerticalScrollIndicator={false}
-        style={s.stripScroll}
-        contentContainerStyle={s.stripScrollContent}
-      >
-        <Pressable
-          onPress={onToggleMute}
-          style={[
-            s.iconBadge,
-            {
-              backgroundColor: iconBg,
-              borderColor: sendMuted ? '#f85149' : accentColor,
-            },
-          ]}
-        >
-          <Text style={s.iconBadgeText}>{badge}</Text>
-          {sendMuted ? <View style={s.iconMuteSlash} /> : null}
-        </Pressable>
-        <Text style={s.stripTitle} numberOfLines={2}>
-          {primary}
-        </Text>
-        {secondary ? <Text style={s.stripSub}>{secondary}</Text> : null}
-        <View style={s.levelRow}>
-          {pcmIndexFromChannel(ch) != null ? (
-            <View style={s.vuCol}>
-              <Text style={s.vuLabel}>dB</Text>
-              <View style={s.vuTrack}>
-                <View style={[s.vuFill, { height: vuFill, backgroundColor: vuColor }]} />
-              </View>
-              <Text style={s.vuValue}>{outputDb.toFixed(1)}</Text>
-            </View>
-          ) : null}
-          <RetornoVerticalFader
-            value={send}
-            min={0}
-            max={4}
-            onLiveChange={onSendLive}
-            onCommit={onSend}
-          />
-        </View>
-        <Text style={s.scrollCue}>Role para baixo para ver o EQ</Text>
-        {lockEq ? (
-          <Text style={s.locked}>EQ bloqueado (admin)</Text>
-        ) : (
-          <View style={s.eqCol}>
-            <Text style={s.eqHdr}>
-              {pcmIndexFromChannel(ch) != null ? 'EQ deste PCM' : 'EQ'}
-            </Text>
-            <View style={s.eqRow}>
-              <Text style={s.eqLbl}>Graves</Text>
-              <RetornoFader
-                compact
-                value={eqLow}
-                min={-12}
-                max={12}
-                onCommit={(nv) => onEqBand('lowDb', nv)}
-              />
-            </View>
-            <View style={s.eqRow}>
-              <Text style={s.eqLbl}>Médios</Text>
-              <RetornoFader
-                compact
-                value={eqMid}
-                min={-12}
-                max={12}
-                onCommit={(nv) => onEqBand('midDb', nv)}
-              />
-            </View>
-            <View style={s.eqRow}>
-              <Text style={s.eqLbl}>Agudos</Text>
-              <RetornoFader
-                compact
-                value={eqHigh}
-                min={-12}
-                max={12}
-                onCommit={(nv) => onEqBand('highDb', nv)}
-              />
-            </View>
-          </View>
-        )}
-      </ScrollView>
-    </View>
-  )
-})
+function panShortLabel(pan: number): string {
+  const p = Math.max(-1, Math.min(1, pan))
+  if (p < -0.35) return 'L'
+  if (p > 0.35) return 'R'
+  return 'C'
+}
+
+function groupBadgeLabel(sf: Showfile, channelId: string): string | null {
+  const idx = sf.groups.findIndex((g) => g.channelIds.includes(channelId))
+  if (idx < 0) return null
+  return `G${String(idx + 1).padStart(2, '0')}`
+}
 
 function effectiveEq(
   ch: ChannelStrip,
@@ -273,8 +131,12 @@ type Props = {
   webViewRef: RefObject<InstanceType<typeof WebView> | null>
   masterGain: number
   onMasterGainChange: (v: number) => void
-  /** Nível atual por entrada física PCM (índice 0..N-1). */
-  inputLevelsByIndex?: Record<string, number>
+  /** Retorno WebSocket/Web Audio ativo (para LED “power”). */
+  streamConnected?: boolean
+  /** Medidor agregado no servidor (GET /api/network-quality). */
+  networkQuality?: NetworkQualityUi | null
+  /** Chamado ao mudar send/EQ local — o pai pode acelerar o poll do showfile. */
+  onLocalMixInteraction?: () => void
 }
 
 export function RetornoMixerControls({
@@ -286,8 +148,12 @@ export function RetornoMixerControls({
   webViewRef,
   masterGain,
   onMasterGainChange,
-  inputLevelsByIndex,
+  streamConnected = false,
+  networkQuality = null,
+  onLocalMixInteraction,
 }: Props) {
+  const [mixerTab, setMixerTab] = useState<'channels' | 'groups'>('channels')
+  const [expandedFxId, setExpandedFxId] = useState<string | null>(null)
   const [localSendMutes, setLocalSendMutes] = useState<Record<string, boolean>>({})
   const channelIds = useMemo(() => {
     if (!showfile || !musician) return []
@@ -321,11 +187,12 @@ export function RetornoMixerControls({
         if (!r.ok) return
         const m = (await r.json()) as MusicianStrip
         onMusicianUpdated(m)
+        onLocalMixInteraction?.()
       } catch {
         /* ignore */
       }
     },
-    [apiBase, token, musician, onMusicianUpdated],
+    [apiBase, token, musician, onLocalMixInteraction, onMusicianUpdated],
   )
 
   /** PATCH durante o arrasto (~12/s por faixa). */
@@ -382,12 +249,13 @@ export function RetornoMixerControls({
         const m = (await r.json()) as MusicianStrip
         console.timeEnd(label)
         onMusicianUpdated(m)
+        onLocalMixInteraction?.()
       } catch {
         setLocalSendMutes((prev) => ({ ...prev, [key]: !muted }))
         console.timeEnd(label)
       }
     },
-    [apiBase, musician, onMusicianUpdated, token],
+    [apiBase, musician, onLocalMixInteraction, onMusicianUpdated, token],
   )
 
   const patchEqBand = useCallback(
@@ -415,11 +283,12 @@ export function RetornoMixerControls({
         if (!r.ok) return
         const m = (await r.json()) as MusicianStrip
         onMusicianUpdated(m)
+        onLocalMixInteraction?.()
       } catch {
         /* ignore */
       }
     },
-    [apiBase, token, musician, onMusicianUpdated],
+    [apiBase, token, musician, onLocalMixInteraction, onMusicianUpdated],
   )
 
   const masterWebThrottle = useRef(0)
@@ -471,68 +340,244 @@ export function RetornoMixerControls({
     )
   }
 
+  const netDot =
+    networkQuality == null
+      ? '#484f58'
+      : networkQuality.level === 'good'
+        ? '#39ff14'
+        : networkQuality.level === 'warn'
+          ? '#d29922'
+          : '#f85149'
+
   return (
     <View style={s.wrap}>
-      <ScrollView
-        horizontal
-        nestedScrollEnabled
-        showsHorizontalScrollIndicator
-        style={s.hScroll}
-        contentContainerStyle={s.hScrollInner}
-      >
-        {musician.scope.groupIds.map((gid) => {
-          const g = showfile.groups.find((x) => x.id === gid)
-          if (!g) return null
-          const v = musician.sendGains[gid] ?? 1
-          return (
-            <View key={gid} style={[s.strip, s.stripGroup]}>
-              <Text style={s.stripTitle} numberOfLines={2}>
-                {g.name}
-              </Text>
-              <Text style={s.stripSub}>Grupo</Text>
-              <RetornoVerticalFader
-                value={v}
-                min={0}
-                max={4}
-                onLiveChange={(nv) => patchSendLive(gid, nv)}
-                onCommit={(nv) => void patchSend(gid, nv)}
-              />
-            </View>
-          )
-        })}
+      <View style={s.topBar}>
+        <Pressable style={s.iconBtn} hitSlop={8}>
+          <Text style={s.iconBtnTxt}>☰</Text>
+        </Pressable>
+        <View style={s.segment}>
+          <Pressable
+            onPress={() => setMixerTab('channels')}
+            style={[s.segBtn, mixerTab === 'channels' && s.segBtnOn]}
+          >
+            <Text style={[s.segTxt, mixerTab === 'channels' && s.segTxtOn]}>
+              Canais
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setMixerTab('groups')}
+            style={[s.segBtn, mixerTab === 'groups' && s.segBtnOn]}
+          >
+            <Text style={[s.segTxt, mixerTab === 'groups' && s.segTxtOn]}>
+              Grupos
+            </Text>
+          </Pressable>
+        </View>
+        <View style={s.topBarRight}>
+          <Text style={s.powerIcon}>⏻</Text>
+          <View
+            style={[
+              s.powerLed,
+              { backgroundColor: streamConnected ? '#2ea043' : '#30363d' },
+            ]}
+          />
+          <View style={[s.netDot, { backgroundColor: netDot }]} />
+        </View>
+      </View>
+      {networkQuality ? (
+        <Text style={s.netHint} numberOfLines={2}>
+          {networkQuality.hint ?? ''}
+          {networkQuality.rttMs != null
+            ? ` · RTT ~${networkQuality.rttMs} ms`
+            : ''}
+        </Text>
+      ) : null}
 
-        {channelIds.map((cid) => {
-          const ch = showfile.channels.find((c) => c.id === cid)
-          if (!ch) return null
-          const send = musician.sendGains[cid] ?? 1
-          const sendMuted = Boolean(localSendMutes[cid] ?? musician.sendMutes?.[cid])
-          const eq = effectiveEq(ch, musician, cid)
-          const accentColor = channelAccentColor(ch)
-          return (
-            <RetornoMixerChannelStrip
-              key={cid}
-              ch={ch}
-              send={send}
-              eqLow={eq.lowDb}
-              eqMid={eq.midDb}
-              eqHigh={eq.highDb}
-              inputLevel={typeof ch.captureInputIndex === 'number'
-                ? inputLevelsByIndex?.[String(ch.captureInputIndex)] ?? 0
-                : 0}
-              accentColor={accentColor}
-              sendMuted={sendMuted}
-              lockEq={ch.lockEq}
-              onSendLive={(nv) => patchSendLive(cid, nv)}
-              onSend={(nv) => void patchSend(cid, nv)}
-              onToggleMute={() => void patchSendMute(cid, !sendMuted)}
-              onEqBand={(band, nv) => void patchEqBand(cid, band, nv)}
-            />
-          )
-        })}
+      {mixerTab === 'groups' ? (
+        <ScrollView
+          style={s.listScroll}
+          nestedScrollEnabled
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator
+        >
+          {musician.scope.groupIds.length === 0 ? (
+            <Text style={s.groupsEmpty}>
+              Sem subgrupos no teu escopo. O técnico pode associar um Aux / grupo no
+              desktop para misturares só esse bus com o teu ouvido.
+            </Text>
+          ) : (
+            musician.scope.groupIds.map((gid) => {
+              const g = showfile.groups.find((x) => x.id === gid)
+              if (!g) return null
+              const v = musician.sendGains[gid] ?? 1
+              const gm = Boolean(
+                localSendMutes[gid] ?? musician.sendMutes?.[gid],
+              )
+              return (
+                <View key={gid} style={s.groupCard}>
+                  <View style={s.rowTop}>
+                    <Text style={s.groupTitle}>{g.name}</Text>
+                    <Text style={s.volPill}>Vol {Math.round(v * 100)}%</Text>
+                  </View>
+                  <RetornoFader
+                    value={v}
+                    min={0}
+                    max={4}
+                    onCommit={(nv) => void patchSend(gid, nv)}
+                  />
+                  <View style={s.rowActions}>
+                    <Pressable
+                      style={[s.msBtn, gm && s.msBtnOn]}
+                      onPress={() => void patchSendMute(gid, !gm)}
+                    >
+                      <Text style={s.msBtnTxt}>M</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              )
+            })
+          )}
+        </ScrollView>
+      ) : (
+        <ScrollView
+          style={s.listScroll}
+          nestedScrollEnabled
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator
+        >
+          {channelIds.map((cid, idx) => {
+            const ch = showfile.channels.find((c) => c.id === cid)
+            if (!ch) return null
+            const send = musician.sendGains[cid] ?? 1
+            const sendMuted = Boolean(
+              localSendMutes[cid] ?? musician.sendMutes?.[cid],
+            )
+            const eq = effectiveEq(ch, musician, cid)
+            const accentColor = channelAccentColor(ch)
+            const { primary } = stripTitles(ch)
+            const badge = channelIconBadge(ch.icon)
+            const gBadge = groupBadgeLabel(showfile, cid)
+            const num = String(idx + 1).padStart(2, '0')
+            const expanded = expandedFxId === cid
+            return (
+              <View key={cid} style={[s.channelCard, { borderLeftColor: accentColor }]}>
+                <View style={s.channelRow}>
+                  <View style={s.channelLeft}>
+                    <Text style={s.chNum}>{num}</Text>
+                    <View
+                      style={[
+                        s.chIcon,
+                        {
+                          backgroundColor: sendMuted
+                            ? lightenHexColor(accentColor, 0.5)
+                            : accentColor,
+                        },
+                      ]}
+                    >
+                      <Text style={s.chIconTxt}>{badge}</Text>
+                    </View>
+                    <View style={s.chTitles}>
+                      <Text style={s.chName} numberOfLines={1}>
+                        {primary}
+                      </Text>
+                      <View style={s.chMeta}>
+                        {gBadge ? (
+                          <Text style={[s.gBadge, { color: accentColor }]}>
+                            {gBadge}
+                          </Text>
+                        ) : (
+                          <Text style={s.gBadgeMuted}>—</Text>
+                        )}
+                      </View>
+                    </View>
+                  </View>
+                  <View style={s.msFx}>
+                    <Pressable
+                      style={[s.msBtn, sendMuted && s.msBtnOn]}
+                      onPress={() => void patchSendMute(cid, !sendMuted)}
+                    >
+                      <Text style={s.msBtnTxt}>M</Text>
+                    </Pressable>
+                    <View style={[s.msBtn, s.msBtnDisabled]}>
+                      <Text style={s.msBtnTxtDim}>S</Text>
+                    </View>
+                    <Pressable
+                      style={[s.msBtn, expanded && s.msBtnOn]}
+                      onPress={() =>
+                        setExpandedFxId((x) => (x === cid ? null : cid))
+                      }
+                    >
+                      <Text style={s.msBtnTxt}>FX</Text>
+                    </Pressable>
+                  </View>
+                  <View style={s.faderCol}>
+                    <RetornoFader
+                      value={send}
+                      min={0}
+                      max={4}
+                      onCommit={(nv) => void patchSend(cid, nv)}
+                    />
+                    <Text style={[s.volReadout, { color: accentColor }]}>
+                      Vol {Math.round(send * 100)}%
+                    </Text>
+                  </View>
+                </View>
+                <View style={s.panRow}>
+                  <Text style={s.panLbl}>Pan (mesa)</Text>
+                  <Text style={[s.panVal, { color: accentColor }]}>
+                    {panShortLabel(ch.pan)}
+                  </Text>
+                </View>
+                {expanded ? (
+                  ch.lockEq ? (
+                    <Text style={s.eqLocked}>EQ bloqueado pelo técnico</Text>
+                  ) : (
+                    <View style={s.eqBlock}>
+                      <Text style={s.eqHdrSm}>EQ neste ouvido</Text>
+                      <View style={s.eqRowSm}>
+                        <Text style={s.eqLblSm}>L</Text>
+                        <RetornoFader
+                          compact
+                          value={eq.lowDb}
+                          min={-12}
+                          max={12}
+                          onCommit={(nv) => void patchEqBand(cid, 'lowDb', nv)}
+                        />
+                      </View>
+                      <View style={s.eqRowSm}>
+                        <Text style={s.eqLblSm}>M</Text>
+                        <RetornoFader
+                          compact
+                          value={eq.midDb}
+                          min={-12}
+                          max={12}
+                          onCommit={(nv) => void patchEqBand(cid, 'midDb', nv)}
+                        />
+                      </View>
+                      <View style={s.eqRowSm}>
+                        <Text style={s.eqLblSm}>H</Text>
+                        <RetornoFader
+                          compact
+                          value={eq.highDb}
+                          min={-12}
+                          max={12}
+                          onCommit={(nv) =>
+                            void patchEqBand(cid, 'highDb', nv)
+                          }
+                        />
+                      </View>
+                    </View>
+                  )
+                ) : null}
+              </View>
+            )
+          })}
+        </ScrollView>
+      )}
 
-        <View style={[s.strip, s.stripMaster]}>
-          <Text style={s.stripTitle}>MASTER</Text>
-          <Text style={s.stripSub}>Retorno local</Text>
+      <View style={s.masterRow}>
+        <Text style={s.masterLbl}>MASTER</Text>
+        <View style={s.masterFader}>
           <RetornoVerticalFader
             value={masterGain}
             min={0}
@@ -540,14 +585,16 @@ export function RetornoMixerControls({
             onLiveChange={(v) => {
               onMasterGainChange(v)
               pushMasterToWebLive(v)
+              onLocalMixInteraction?.()
             }}
             onCommit={(v) => {
               onMasterGainChange(v)
               pushMasterToWeb(v)
+              onLocalMixInteraction?.()
             }}
           />
         </View>
-      </ScrollView>
+      </View>
     </View>
   )
 }
@@ -556,6 +603,11 @@ const s = StyleSheet.create({
   wrap: {
     marginHorizontal: 6,
     marginBottom: 8,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#1f2a3a',
+    backgroundColor: '#0a1018',
+    padding: 10,
   },
   syncWarnBox: {
     marginBottom: 10,
@@ -572,167 +624,200 @@ const s = StyleSheet.create({
   hint: { color: '#8b949e', paddingHorizontal: 12, paddingBottom: 8 },
   warn: { color: '#f0883e', fontSize: 12, lineHeight: 18 },
   bold: { fontWeight: '700', color: '#f0883e' },
-  hScroll: { flexGrow: 0, minHeight: 240 },
-  hScrollInner: {
-    paddingVertical: 4,
-    paddingRight: 12,
-    alignItems: 'flex-start',
+  topBar: {
     flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    paddingHorizontal: 2,
   },
-  strip: {
-    width: 148,
-    marginRight: 8,
-    height: 258,
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    borderRadius: 16,
-    backgroundColor: '#171d28',
+  iconBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#2a3445',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 2,
+    borderColor: '#273446',
+    backgroundColor: '#131a26',
   },
-  stripScroll: {
-    width: '100%',
-    flex: 1,
+  iconBtnTxt: { color: '#e6edf3', fontSize: 16, fontWeight: '800' },
+  segment: {
+    flexDirection: 'row',
+    backgroundColor: '#0f1621',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#33445d',
+    overflow: 'hidden',
   },
-  stripScrollContent: {
-    alignItems: 'center',
-    paddingBottom: 12,
+  segBtn: { paddingVertical: 8, paddingHorizontal: 17 },
+  segBtnOn: { backgroundColor: '#1e3147' },
+  segTxt: { color: '#8fa1b7', fontSize: 13, fontWeight: '800' },
+  segTxtOn: { color: '#f0f6fc' },
+  topBarRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  powerIcon: { color: '#2ea043', fontSize: 18, fontWeight: '900' },
+  powerLed: {
+    width: 14,
+    height: 14,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#30363d',
   },
-  stripGroup: {
+  netDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#30363d',
+  },
+  netHint: {
+    color: '#9ab0c8',
+    fontSize: 11,
+    lineHeight: 16,
+    marginBottom: 10,
+    paddingHorizontal: 2,
+  },
+  listScroll: { maxHeight: 450 },
+  groupsEmpty: {
+    color: '#8b949e',
+    fontSize: 12,
+    lineHeight: 18,
+    padding: 12,
+  },
+  groupCard: {
+    backgroundColor: '#101722',
+    borderRadius: 16,
+    borderWidth: 1,
     borderColor: '#6e40c9',
-    backgroundColor: '#21172c',
+    padding: 12,
+    marginBottom: 10,
   },
-  stripMaster: {
-    width: 82,
-    borderColor: '#2f81f7',
-    backgroundColor: '#102440',
-  },
-  stripTitle: {
-    color: '#f8fafc',
-    fontSize: 13,
-    fontWeight: '800',
-    textAlign: 'center',
-    minHeight: 20,
-  },
-  stripSub: {
-    color: '#94a3b8',
-    fontSize: 10,
+  rowTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 6,
-    textAlign: 'center',
   },
-  iconBadge: {
+  groupTitle: { color: '#e6edf3', fontSize: 15, fontWeight: '800' },
+  volPill: {
+    color: '#d2a8ff',
+    fontSize: 12,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+  },
+  rowActions: { flexDirection: 'row', marginTop: 8, gap: 8 },
+  channelCard: {
+    backgroundColor: '#0f151f',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#223143',
+    borderLeftWidth: 3,
+    padding: 11,
+    marginBottom: 11,
+  },
+  channelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  channelLeft: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minWidth: 0,
+  },
+  chNum: {
+    color: '#90a4bb',
+    fontSize: 11,
+    fontWeight: '800',
+    width: 22,
+    fontVariant: ['tabular-nums'],
+  },
+  chIcon: {
     width: 36,
     height: 36,
     borderRadius: 10,
-    borderWidth: 1.5,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#212c3b',
   },
-  iconBadgeText: {
-    color: '#081018',
-    fontWeight: '900',
-    fontSize: 12,
-    letterSpacing: 0.6,
-  },
-  iconMuteSlash: {
-    position: 'absolute',
-    width: 42,
-    height: 4,
-    borderRadius: 999,
-    backgroundColor: '#f85149',
-    transform: [{ rotate: '-45deg' }],
-    shadowColor: '#000',
-    shadowOpacity: 0.32,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 1 },
-  },
-  levelRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 8,
-    marginBottom: 8,
-  },
-  scrollCue: {
-    color: '#7d8590',
-    fontSize: 10,
-    fontWeight: '700',
-    marginBottom: 10,
-  },
-  vuCol: {
+  chIconTxt: { color: '#081018', fontWeight: '900', fontSize: 11 },
+  chTitles: { flex: 1, minWidth: 0 },
+  chName: { color: '#f0f6fc', fontSize: 14, fontWeight: '800' },
+  chMeta: { flexDirection: 'row', marginTop: 2 },
+  gBadge: { fontSize: 11, fontWeight: '800' },
+  gBadgeMuted: { color: '#484f58', fontSize: 11 },
+  msFx: { flexDirection: 'row', gap: 4 },
+  msBtn: {
+    minWidth: 32,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    borderRadius: 8,
+    backgroundColor: '#1a2331',
+    borderWidth: 1,
+    borderColor: '#30363d',
     alignItems: 'center',
-    width: 24,
   },
-  vuWrap: {
-    width: 24,
-    marginBottom: 8,
-  },
-  vuHeadRow: {
-    width: '100%',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 3,
-  },
-  vuLabel: {
-    color: '#6e7681',
-    fontSize: 9,
-    fontWeight: '600',
-  },
-  vuValue: {
-    color: '#8b949e',
-    fontSize: 9,
+  msBtnOn: { borderColor: '#f85149', backgroundColor: '#372325' },
+  msBtnDisabled: { opacity: 0.45 },
+  msBtnTxt: { color: '#e6edf3', fontSize: 12, fontWeight: '900' },
+  msBtnTxtDim: { color: '#6e7681', fontSize: 12, fontWeight: '800' },
+  faderCol: { width: 144 },
+  volReadout: {
+    fontSize: 11,
+    fontWeight: '800',
+    marginTop: 4,
+    textAlign: 'center',
     fontVariant: ['tabular-nums'],
   },
-  vuTrack: {
-    width: 14,
-    height: 106,
-    borderRadius: 999,
-    backgroundColor: '#0f141b',
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#2c3747',
-    marginVertical: 4,
-  },
-  vuFill: {
-    width: '100%',
-    borderRadius: 999,
-    backgroundColor: '#2ea043',
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-  },
-  locked: {
-    color: '#8b949e',
-    fontSize: 9,
-    marginTop: 6,
-    textAlign: 'center',
-  },
-  eqCol: {
-    width: '100%',
-    marginTop: 24,
-    borderTopWidth: 1,
-    borderTopColor: '#2a3445',
+  panRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 9,
     paddingTop: 6,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#21262d',
   },
-  eqHdr: {
+  panLbl: { color: '#8ea1b7', fontSize: 10 },
+  panVal: { fontSize: 12, fontWeight: '800' },
+  eqLocked: { color: '#8b949e', fontSize: 11, marginTop: 8 },
+  eqBlock: {
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#21262d',
+    backgroundColor: '#0b1018',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingBottom: 6,
+  },
+  eqHdrSm: {
     color: '#79c0ff',
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '800',
     marginBottom: 6,
-    alignSelf: 'center',
   },
-  eqRow: { width: '100%', marginBottom: 6 },
-  eqLbl: {
+  eqRowSm: { marginBottom: 6 },
+  eqLblSm: {
     color: '#98a6bc',
-    fontSize: 9,
-    marginBottom: 3,
+    fontSize: 10,
+    marginBottom: 2,
     fontWeight: '700',
   },
+  masterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 14,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#21262d',
+    gap: 12,
+  },
+  masterLbl: {
+    color: '#58a6ff',
+    fontSize: 13,
+    fontWeight: '900',
+    width: 72,
+  },
+  masterFader: { height: 210 },
 })

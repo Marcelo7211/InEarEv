@@ -37,16 +37,74 @@ const HTTP_PORT = 3847
 const UDP_AUDIO_PORT = 9876
 const UDP_CONTROL_PORT = 9877
 
+/**
+ * Binários empacotados pelo electron-builder (extraResources → resources/ffmpeg-win/).
+ * Em dev, usa apps/desktop-server/resources/ffmpeg-win/.
+ * @returns {string | null} diretório que contém ffmpeg.exe
+ */
+function getBundledWinFfmpegDir() {
+  if (process.platform !== 'win32') return null
+  const candidates = []
+  try {
+    if (process.resourcesPath) {
+      candidates.push(path.join(process.resourcesPath, 'ffmpeg-win'))
+    }
+  } catch {
+    /* */
+  }
+  candidates.push(path.join(__dirname, '..', 'resources', 'ffmpeg-win'))
+  for (const d of candidates) {
+    const p = path.join(d, 'ffmpeg.exe')
+    if (fs.existsSync(p)) return d
+  }
+  return null
+}
+
+/** @param {string} cmdBase ex.: ffmpeg, ffprobe (sem .exe) */
+function resolveExecutableOnWindowsPath(cmdBase) {
+  const base = String(cmdBase || '').trim()
+  if (!base) return null
+  const pathDirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean)
+  const names = base.toLowerCase().endsWith('.exe')
+    ? [base]
+    : [`${base}.exe`, base]
+  for (const dir of pathDirs) {
+    for (const n of names) {
+      const p = path.join(dir, n)
+      if (fs.existsSync(p)) return p
+    }
+  }
+  try {
+    const r = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', `where ${base}`], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: process.env,
+      windowsHide: true,
+    })
+    const line = (r.stdout || '').trim().split(/\r?\n/)[0]
+    if (line && fs.existsSync(line)) return line
+  } catch {
+    /* */
+  }
+  return null
+}
+
 function augmentPathForFfmpeg(env) {
-  const extra = [
+  const extra = []
+  if (process.platform === 'win32') {
+    const b = getBundledWinFfmpegDir()
+    if (b) extra.push(b)
+  }
+  extra.push(
     '/opt/homebrew/bin',
     '/usr/local/bin',
     '/opt/local/bin',
     process.env.HOME ? path.join(process.env.HOME, '.nix-profile/bin') : '',
-  ].filter(Boolean)
+  )
+  const filtered = extra.filter(Boolean)
   return {
     ...env,
-    PATH: [...extra, env.PATH || ''].join(path.delimiter),
+    PATH: [...filtered, env.PATH || ''].join(path.delimiter),
   }
 }
 
@@ -54,6 +112,15 @@ function augmentPathForFfmpeg(env) {
 function findFfmpegExecutable() {
   if (process.env.INEAR_FFMPEG && fs.existsSync(process.env.INEAR_FFMPEG)) {
     return process.env.INEAR_FFMPEG
+  }
+  if (process.platform === 'win32') {
+    const bundled = getBundledWinFfmpegDir()
+    if (bundled) {
+      const p = path.join(bundled, 'ffmpeg.exe')
+      if (fs.existsSync(p)) return p
+    }
+    const w = resolveExecutableOnWindowsPath('ffmpeg')
+    if (w) return w
   }
   const dirs = [
     '/opt/homebrew/bin',
@@ -84,10 +151,25 @@ function findFfprobeExecutable() {
   if (process.env.INEAR_FFPROBE && fs.existsSync(process.env.INEAR_FFPROBE)) {
     return process.env.INEAR_FFPROBE
   }
+  if (process.platform === 'win32') {
+    const bundled = getBundledWinFfmpegDir()
+    if (bundled) {
+      const p = path.join(bundled, 'ffprobe.exe')
+      if (fs.existsSync(p)) return p
+    }
+  }
   const ffmpeg = findFfmpegExecutable()
   if (ffmpeg) {
     const pb = path.join(path.dirname(ffmpeg), 'ffprobe')
     if (fs.existsSync(pb)) return pb
+    if (process.platform === 'win32') {
+      const pbExe = path.join(path.dirname(ffmpeg), 'ffprobe.exe')
+      if (fs.existsSync(pbExe)) return pbExe
+    }
+  }
+  if (process.platform === 'win32') {
+    const w = resolveExecutableOnWindowsPath('ffprobe')
+    if (w) return w
   }
   const dirs = [
     '/opt/homebrew/bin',
@@ -116,6 +198,11 @@ function findFfprobeExecutable() {
 const AVF_PROBE_TTL_MS = 60_000
 /** @type {Map<number, { channels: number | null, error: string | null, at: number }>} */
 const avfInputChannelsProbeCache = new Map()
+/** @type {Map<string, { channels: number | null, error: string | null, at: number }>} */
+const dshowInputChannelsProbeCache = new Map()
+
+const DSHOW_PROBE_HINT =
+  'DirectShow: permite o microfone nas definições de privacidade do Windows; fecha apps que monopolizam o dispositivo; confirma que o ffmpeg inclui suporte dshow (build completa).'
 
 function truncateProbeMsg(s, max = 220) {
   const t = String(s || '').replace(/\s+/g, ' ').trim()
@@ -536,6 +623,277 @@ function probeAvfoundationInputChannels(deviceIndex, opts = {}) {
   return probeAvfoundationInputChannelsResult(deviceIndex, opts).channels
 }
 
+/** @param {string} deviceName */
+function dshowAudioInputSpecifier(deviceName) {
+  return `audio=${String(deviceName || '').trim()}`
+}
+
+/**
+ * @param {string} ffmpeg
+ * @param {string} deviceName
+ * @param {object} spawnOpts
+ * @returns {{ best: number | null, errMsg: string | null }}
+ */
+function ffmpegDshowChannelCountSync(ffmpeg, deviceName, spawnOpts) {
+  const name = String(deviceName || '').trim()
+  if (!name) return { best: null, errMsg: 'nome de dispositivo vazio' }
+  const args = [
+    '-nostats',
+    '-hide_banner',
+    '-loglevel',
+    'info',
+    '-t',
+    '0.25',
+    '-f',
+    'dshow',
+    '-i',
+    dshowAudioInputSpecifier(name),
+    '-f',
+    'null',
+    '-',
+  ]
+  const r = spawnSync(ffmpeg, args, { ...spawnOpts, windowsHide: true })
+  const log = `${r.stderr || ''}${r.stdout || ''}`
+  if (r.error) {
+    return { best: null, errMsg: truncateProbeMsg(r.error.message || String(r.error)) }
+  }
+  const n = parseFfmpegProbeLogForAudioChannelCount(log)
+  if (n != null) return { best: n, errMsg: null }
+  const tail = log.trim()
+  return {
+    best: null,
+    errMsg: tail
+      ? truncateProbeMsg(`ffmpeg exit ${r.status}: ${tail}`)
+      : `ffmpeg terminou com código ${r.status}`,
+  }
+}
+
+/**
+ * @param {string} ffmpeg
+ * @param {string} deviceName
+ * @param {object} execOpts
+ * @returns {Promise<{ best: number | null, errMsg: string | null }>}
+ */
+async function ffmpegDshowChannelCountAsync(ffmpeg, deviceName, execOpts) {
+  const name = String(deviceName || '').trim()
+  if (!name) return { best: null, errMsg: 'nome de dispositivo vazio' }
+  const args = [
+    '-nostats',
+    '-hide_banner',
+    '-loglevel',
+    'info',
+    '-t',
+    '0.25',
+    '-f',
+    'dshow',
+    '-i',
+    dshowAudioInputSpecifier(name),
+    '-f',
+    'null',
+    '-',
+  ]
+  try {
+    const { stdout, stderr } = await execFileP(ffmpeg, args, {
+      ...execOpts,
+      windowsHide: true,
+    })
+    const log = `${stderr || ''}${stdout || ''}`
+    const n = parseFfmpegProbeLogForAudioChannelCount(log)
+    if (n != null) return { best: n, errMsg: null }
+    return { best: null, errMsg: truncateProbeMsg('ffmpeg dshow: sem canais no log') }
+  } catch (e) {
+    const tail = `${e.stderr || ''}${e.stdout || ''}`.trim()
+    return {
+      best: null,
+      errMsg: tail
+        ? truncateProbeMsg(`ffmpeg: ${tail}`)
+        : truncateProbeMsg(e.message || String(e)),
+    }
+  }
+}
+
+/**
+ * @param {string} deviceName
+ * @param {{ force?: boolean }} opts
+ * @returns {{ channels: number | null, error: string | null }}
+ */
+function probeDshowInputChannelsResult(deviceName, opts = {}) {
+  if (process.platform !== 'win32') {
+    return { channels: null, error: 'não Windows' }
+  }
+  const name = String(deviceName || '').trim()
+  if (!name) {
+    return { channels: null, error: 'nome de dispositivo vazio' }
+  }
+  const now = Date.now()
+  const cached = dshowInputChannelsProbeCache.get(name)
+  if (!opts.force && cached && now - cached.at < AVF_PROBE_TTL_MS) {
+    return { channels: cached.channels, error: cached.error }
+  }
+  const ffprobe = findFfprobeExecutable()
+  if (!ffprobe) {
+    const err =
+      'ffprobe não encontrado no PATH deste processo (Electron). Instala ffmpeg (inclui ffprobe) ou define INEAR_FFPROBE=caminho\\ffprobe.exe'
+    dshowInputChannelsProbeCache.set(name, { channels: null, error: err, at: now })
+    return { channels: null, error: err }
+  }
+  const spawnOpts = {
+    encoding: 'utf8',
+    maxBuffer: 2 * 1024 * 1024,
+    env: augmentPathForFfmpeg(process.env),
+    timeout: 15000,
+    windowsHide: true,
+  }
+  const args = [
+    '-hide_banner',
+    '-v',
+    'error',
+    '-print_format',
+    'json',
+    '-show_streams',
+    '-f',
+    'dshow',
+    '-i',
+    dshowAudioInputSpecifier(name),
+  ]
+  const r = spawnSync(ffprobe, args, spawnOpts)
+  let best = null
+  let errMsg = null
+  if (r.error) {
+    errMsg = truncateProbeMsg(r.error.message || String(r.error))
+  } else if (r.status !== 0) {
+    const tail = `${r.stderr || ''}${r.stdout || ''}`.trim()
+    errMsg = tail
+      ? truncateProbeMsg(`ffprobe exit ${r.status}: ${tail}`)
+      : `ffprobe terminou com código ${r.status}`
+  } else if (!r.stdout) {
+    errMsg = 'ffprobe sem saída stdout'
+  } else {
+    const parsed = parseFfprobeAvfoundationStdout(r.stdout)
+    best = parsed.best
+    errMsg = parsed.errMsg
+  }
+  if (best == null) {
+    const ffmpeg = findFfmpegExecutable()
+    if (ffmpeg) {
+      const fb = ffmpegDshowChannelCountSync(ffmpeg, name, spawnOpts)
+      if (fb.best != null) {
+        best = fb.best
+        errMsg = null
+      } else {
+        errMsg = truncateProbeMsg(
+          `${errMsg || 'ffprobe sem canais'}; ${fb.errMsg || 'ffmpeg fallback sem sucesso'} — ${DSHOW_PROBE_HINT}`,
+          380,
+        )
+      }
+    } else {
+      errMsg = truncateProbeMsg(
+        `${errMsg || 'ffprobe sem canais'}; ffmpeg não encontrado — ${DSHOW_PROBE_HINT}`,
+        380,
+      )
+    }
+  }
+  const at = Date.now()
+  dshowInputChannelsProbeCache.set(name, {
+    channels: best,
+    error: best != null ? null : errMsg,
+    at,
+  })
+  return { channels: best, error: best != null ? null : errMsg }
+}
+
+/**
+ * @param {string} deviceName
+ * @param {{ force?: boolean }} opts
+ * @returns {Promise<{ channels: number | null, error: string | null }>}
+ */
+async function probeDshowInputChannelsResultAsync(deviceName, opts = {}) {
+  if (process.platform !== 'win32') {
+    return { channels: null, error: 'não Windows' }
+  }
+  const name = String(deviceName || '').trim()
+  if (!name) {
+    return { channels: null, error: 'nome de dispositivo vazio' }
+  }
+  const now = Date.now()
+  const cached = dshowInputChannelsProbeCache.get(name)
+  if (!opts.force && cached && now - cached.at < AVF_PROBE_TTL_MS) {
+    return { channels: cached.channels, error: cached.error }
+  }
+  const ffprobe = findFfprobeExecutable()
+  if (!ffprobe) {
+    const err =
+      'ffprobe não encontrado no PATH deste processo (Electron). Instala ffmpeg (inclui ffprobe) ou define INEAR_FFPROBE=caminho\\ffprobe.exe'
+    dshowInputChannelsProbeCache.set(name, { channels: null, error: err, at: now })
+    return { channels: null, error: err }
+  }
+  const execOpts = {
+    maxBuffer: 2 * 1024 * 1024,
+    timeout: 15000,
+    encoding: 'utf8',
+    env: augmentPathForFfmpeg(process.env),
+    windowsHide: true,
+  }
+  const args = [
+    '-hide_banner',
+    '-v',
+    'error',
+    '-print_format',
+    'json',
+    '-show_streams',
+    '-f',
+    'dshow',
+    '-i',
+    dshowAudioInputSpecifier(name),
+  ]
+  let best = null
+  let errMsg = null
+  try {
+    const { stdout } = await execFileP(ffprobe, args, execOpts)
+    const parsed = parseFfprobeAvfoundationStdout(
+      typeof stdout === 'string' ? stdout : String(stdout || ''),
+    )
+    best = parsed.best
+    errMsg = parsed.errMsg
+  } catch (e) {
+    if (e.killed || e.signal === 'SIGTERM') {
+      errMsg = 'ffprobe timeout (~15s) ou processo terminado'
+    } else {
+      const tail = `${e.stderr || ''}${e.stdout || ''}`.trim()
+      errMsg = tail
+        ? truncateProbeMsg(`ffprobe: ${tail}`)
+        : truncateProbeMsg(e.message || String(e))
+    }
+  }
+  if (best == null) {
+    const ffmpeg = findFfmpegExecutable()
+    if (ffmpeg) {
+      const fb = await ffmpegDshowChannelCountAsync(ffmpeg, name, execOpts)
+      if (fb.best != null) {
+        best = fb.best
+        errMsg = null
+      } else {
+        errMsg = truncateProbeMsg(
+          `${errMsg || 'ffprobe sem canais'}; ${fb.errMsg || 'ffmpeg fallback sem sucesso'} — ${DSHOW_PROBE_HINT}`,
+          380,
+        )
+      }
+    } else {
+      errMsg = truncateProbeMsg(
+        `${errMsg || 'ffprobe sem canais'}; ffmpeg não encontrado — ${DSHOW_PROBE_HINT}`,
+        380,
+      )
+    }
+  }
+  const at = Date.now()
+  dshowInputChannelsProbeCache.set(name, {
+    channels: best,
+    error: best != null ? null : errMsg,
+    at,
+  })
+  return { channels: best, error: best != null ? null : errMsg }
+}
+
 /** @returns {Array<{ index: number, name: string }>} */
 function parseAvfAudioDevices(stderr) {
   const lines = stderr.split(/\r?\n/)
@@ -553,6 +911,24 @@ function parseAvfAudioDevices(stderr) {
     if (m) devices.push({ index: Number(m[1]), name: m[2].trim() })
   }
   return devices
+}
+
+/** @returns {Array<{ index: number, name: string }>} */
+function parseDshowAudioDevices(text) {
+  const lines = String(text || '').split(/\r?\n/)
+  const aIdx = lines.findIndex((l) => /DirectShow audio devices/i.test(l))
+  if (aIdx === -1) return []
+  const names = []
+  const videoRe = /DirectShow video devices/i
+  for (let i = aIdx + 1; i < lines.length; i++) {
+    const raw = lines[i]
+    if (!raw) continue
+    if (videoRe.test(raw)) break
+    if (/Alternative name/i.test(raw)) continue
+    const m = raw.match(/"([^"]+)"/)
+    if (m) names.push(m[1])
+  }
+  return names.map((name, index) => ({ index, name }))
 }
 
 /**
@@ -589,6 +965,16 @@ function pickPreferredAvfoundationDevice(devices) {
     /\b(blackhole|soundflower|loopback)\b/i,
     /\baggregate\b/i,
     /\bmulti[- ]?output\b/i,
+    /\bvb-?audio\b/i,
+    /\bvoicemeeter\b/i,
+    /\bcable\b/i,
+    /\bvirtual\b.*\bcable\b/i,
+    /\b(stereo mix|what u hear)\b/i,
+    /\bline in\b/i,
+    /\bmicrophone\b/i,
+    /\busb\b.*\b(audio|mic)\b/i,
+    /\brealtek\b/i,
+    /\bwasapi\b/i,
   ]
   for (const re of prefer) {
     const d = devices.find((x) => re.test(x.name))
@@ -602,29 +988,14 @@ function statePath(userData) {
 }
 
 function defaultState() {
-  const bcrypt = require('bcryptjs')
   const showfile = migrateShowfile(defaultShowfile())
+  // Primeira execução: instalação "limpa". Admin será criado no wizard inicial.
+  showfile.musicians = []
   return {
     showfile,
     jwtSecret: crypto.randomBytes(32).toString('hex'),
     pairing: null,
-    users: [
-      {
-        username: 'admin',
-        passwordHash: bcrypt.hashSync('admin123', 10),
-        role: 'admin',
-      },
-      {
-        username: 'musician1',
-        passwordHash: bcrypt.hashSync('musician1', 10),
-        role: 'musician',
-      },
-      {
-        username: 'musician2',
-        passwordHash: bcrypt.hashSync('musician2', 10),
-        role: 'musician',
-      },
-    ],
+    users: [],
     /** macOS: índice AVFoundation só-áudio (`none:N` no ffmpeg); usado só em modo `manual`. */
     captureAvfoundationAudioIndex: null,
     /**
@@ -645,6 +1016,8 @@ function defaultState() {
      * Passa a false quando defines N manualmente no painel.
      */
     captureChannelCountAuto: true,
+    /** Bloco PCM por tick do motor de áudio (64/128/256/512 amostras @ 48 kHz). */
+    audioBlockSamples: 128,
   }
 }
 
@@ -697,6 +1070,8 @@ function loadOrCreateState(userData) {
     try {
       const raw = JSON.parse(fs.readFileSync(p, 'utf8'))
       migrateShowfile(raw.showfile)
+      if (!Array.isArray(raw.users)) raw.users = []
+      if (!Array.isArray(raw.showfile.musicians)) raw.showfile.musicians = []
       if (raw.captureAvfoundationAudioIndex === undefined) {
         raw.captureAvfoundationAudioIndex = null
       }
@@ -743,6 +1118,11 @@ function loadOrCreateState(userData) {
       } else {
         raw.captureChannelCountAuto = Boolean(raw.captureChannelCountAuto)
       }
+      if (raw.audioBlockSamples === undefined || raw.audioBlockSamples === null) {
+        raw.audioBlockSamples = 128
+      } else {
+        raw.audioBlockSamples = clampAudioBlockSamples(raw.audioBlockSamples)
+      }
       if (expandMusicianScopeForInterfaceStrips(raw.showfile)) {
         fs.writeFileSync(p, JSON.stringify(raw, null, 2), 'utf8')
       }
@@ -763,6 +1143,13 @@ function saveState(userData, state) {
 
 function clampEqDb(v) {
   return Math.max(-12, Math.min(12, Number(v) || 0))
+}
+
+const AUDIO_BLOCK_OPTIONS = [64, 128, 256, 512]
+
+function clampAudioBlockSamples(n) {
+  const x = Math.floor(Number(n))
+  return AUDIO_BLOCK_OPTIONS.includes(x) ? x : 128
 }
 
 function channelVisibleToMusician(m, cid, sf) {
@@ -788,6 +1175,8 @@ function createServices(app) {
   const rateLimit = require('express-rate-limit')
 
   let state = loadOrCreateState(userData)
+  /** @type {Map<string, { lastReportSeqGaps: number | null, samples: Array<{ t: number, rtt: number, gapsDelta: number }> }>} */
+  const telemetryBySub = new Map()
   /** @type {Map<string, { address: string, port: number }>} */
   const udpTargets = new Map()
   /** @type {Map<string, Set<import('ws').WebSocket>>} retorno no telemóvel (Expo Go) sem UDP nativo */
@@ -798,12 +1187,68 @@ function createServices(app) {
   let audioTimeout = null
   let nextAudioTickAt = Date.now()
 
-  /**
-   * 256 @48 kHz ≈ 5,33 ms por tick.
-   * Compromisso mais seguro entre latência e áudio limpo para palco ao vivo.
-   */
-  function frameSizeForProfile() {
-    return 256
+  function audioBlockSamples() {
+    return clampAudioBlockSamples(state.audioBlockSamples)
+  }
+
+  function networkHint(level, avgRtt, gapsPm) {
+    if (level === 'bad') {
+      if (gapsPm > 8) {
+        return 'Muitos saltos de pacotes — prefira Wi‑Fi 5 GHz, router dedicado ao palco e servidor com Ethernet ao AP.'
+      }
+      return 'Latência de rede alta — aproxime o telemóvel do router, evite VPN e redes públicas.'
+    }
+    if (level === 'warn') {
+      return 'Ligação utilizável — se ouvir cortes, use 5 GHz ou aproxime-se do access point.'
+    }
+    return 'Ligação estável para retorno.'
+  }
+
+  function computeQualityFromSamples(samples) {
+    if (!samples || samples.length === 0) {
+      return {
+        level: 'warn',
+        rttMs: null,
+        jitterMs: null,
+        gapsPerMinute: 0,
+        hint: 'Sem telemetria ainda — inicie o retorno (WebSocket) no telemóvel.',
+      }
+    }
+    const windowMs = 45000
+    const now = Date.now()
+    const recent = samples.filter((s) => now - s.t < windowMs)
+    if (recent.length === 0) {
+      return {
+        level: 'warn',
+        rttMs: null,
+        jitterMs: null,
+        gapsPerMinute: 0,
+        hint: 'Dados de rede desatualizados — confirme que o retorno está ativo.',
+      }
+    }
+    const rtts = recent
+      .map((s) => s.rtt)
+      .filter((r) => typeof r === 'number' && r >= 0 && r < 5000)
+    const avgRtt = rtts.length ? rtts.reduce((a, b) => a + b, 0) / rtts.length : 0
+    const mean = avgRtt
+    const variance =
+      rtts.length > 1
+        ? rtts.reduce((acc, r) => acc + (r - mean) ** 2, 0) / rtts.length
+        : 0
+    const jitter = Math.sqrt(variance)
+    const gapSum = recent.reduce((a, s) => a + (s.gapsDelta || 0), 0)
+    const spanMin = Math.max(0.25, (now - recent[0].t) / 60000)
+    const gapsPerMinute = gapSum / spanMin
+    let level = 'good'
+    if (avgRtt > 85 || gapsPerMinute > 18) level = 'bad'
+    else if (avgRtt > 38 || gapsPerMinute > 5) level = 'warn'
+    return {
+      level,
+      rttMs: Math.round(avgRtt * 10) / 10,
+      jitterMs: Math.round(jitter * 10) / 10,
+      gapsPerMinute: Math.round(gapsPerMinute * 10) / 10,
+      hint: networkHint(level, avgRtt, gapsPerMinute),
+    }
   }
   function muteFadeSamples() {
     return Math.max(1, Math.round(MVP_SAMPLE_RATE_HZ * 0.02))
@@ -853,26 +1298,49 @@ function createServices(app) {
     return parseAvfAudioDevices(stderr)
   }
 
-  let avfDevicesCache = {
+  function listDshowAudioDevices() {
+    if (process.platform !== 'win32') return []
+    const ffmpeg = findFfmpegExecutable()
+    if (!ffmpeg) return []
+    const r = spawnSync(
+      ffmpeg,
+      ['-hide_banner', '-f', 'dshow', '-list_devices', 'true', '-i', 'dummy'],
+      {
+        encoding: 'utf8',
+        env: augmentPathForFfmpeg(process.env),
+        windowsHide: true,
+      },
+    )
+    const combined = `${r.stderr || ''}${r.stdout || ''}`
+    return parseDshowAudioDevices(combined)
+  }
+
+  let pcCaptureDevicesCache = {
     /** @type {{ index: number, name: string }[] | null} */
     list: null,
     at: 0,
   }
   const AVF_LIST_TTL_MS = 5000
 
-  function listAvfoundationCached() {
+  function listPcAudioCaptureDevicesCached() {
     const now = Date.now()
-    if (avfDevicesCache.list && now - avfDevicesCache.at < AVF_LIST_TTL_MS) {
-      return avfDevicesCache.list
+    if (pcCaptureDevicesCache.list && now - pcCaptureDevicesCache.at < AVF_LIST_TTL_MS) {
+      return pcCaptureDevicesCache.list
     }
-    const list = listAvfoundationAudioDevices()
-    avfDevicesCache = { list, at: now }
+    let list = []
+    if (process.platform === 'darwin') {
+      list = listAvfoundationAudioDevices()
+    } else if (process.platform === 'win32') {
+      list = listDshowAudioDevices()
+    }
+    pcCaptureDevicesCache = { list, at: now }
     return list
   }
 
-  function bustAvfCache() {
-    avfDevicesCache = { list: null, at: 0 }
+  function bustPcCaptureCaches() {
+    pcCaptureDevicesCache = { list: null, at: 0 }
     avfInputChannelsProbeCache.clear()
+    dshowInputChannelsProbeCache.clear()
   }
 
   /** @param {{ index: number, name: string }[]} devices */
@@ -891,7 +1359,7 @@ function createServices(app) {
   }
 
   /** @param {{ index: number, name: string }[]} devices */
-  function computeAvfCaptureMeta(devices) {
+  function computePcCaptureMeta(devices) {
     const envOn = Boolean(String(process.env.INEAR_CAPTURE_CMD || '').trim())
     if (envOn) {
       return {
@@ -902,26 +1370,40 @@ function createServices(app) {
         mode: state.captureAvfoundationMode || 'auto',
       }
     }
-    if (process.platform !== 'darwin') {
+    if (process.platform === 'darwin') {
+      const mode = state.captureAvfoundationMode || 'auto'
+      const eff = resolveEffectiveAvfoundationIndex(devices)
+      const name =
+        eff != null ? devices.find((d) => d.index === eff)?.name ?? null : null
+      const autoPicked = mode === 'auto' && eff != null
       return {
-        captureSource: 'none',
-        effectiveIndex: null,
-        effectiveName: null,
-        autoPicked: false,
-        mode: state.captureAvfoundationMode || 'auto',
+        captureSource: eff != null ? 'avfoundation' : 'none',
+        effectiveIndex: eff,
+        effectiveName: name,
+        autoPicked,
+        mode,
       }
     }
-    const mode = state.captureAvfoundationMode || 'auto'
-    const eff = resolveEffectiveAvfoundationIndex(devices)
-    const name =
-      eff != null ? devices.find((d) => d.index === eff)?.name ?? null : null
-    const autoPicked = mode === 'auto' && eff != null
+    if (process.platform === 'win32') {
+      const mode = state.captureAvfoundationMode || 'auto'
+      const eff = resolveEffectiveAvfoundationIndex(devices)
+      const name =
+        eff != null ? devices.find((d) => d.index === eff)?.name ?? null : null
+      const autoPicked = mode === 'auto' && eff != null
+      return {
+        captureSource: eff != null ? 'dshow' : 'none',
+        effectiveIndex: eff,
+        effectiveName: name,
+        autoPicked,
+        mode,
+      }
+    }
     return {
-      captureSource: eff != null ? 'avfoundation' : 'none',
-      effectiveIndex: eff,
-      effectiveName: name,
-      autoPicked,
-      mode,
+      captureSource: 'none',
+      effectiveIndex: null,
+      effectiveName: null,
+      autoPicked: false,
+      mode: state.captureAvfoundationMode || 'auto',
     }
   }
 
@@ -1019,9 +1501,9 @@ function createServices(app) {
     }
 
     if (process.platform === 'darwin') {
-      bustAvfCache()
+      bustPcCaptureCaches()
       const devices = listAvfoundationAudioDevices()
-      avfDevicesCache = { list: devices, at: Date.now() }
+      pcCaptureDevicesCache = { list: devices, at: Date.now() }
       const n = resolveEffectiveAvfoundationIndex(devices)
       if (n != null) {
         const ffmpeg = findFfmpegExecutable()
@@ -1090,8 +1572,85 @@ function createServices(app) {
       }
     }
 
+    if (process.platform === 'win32') {
+      bustPcCaptureCaches()
+      const devices = listDshowAudioDevices()
+      pcCaptureDevicesCache = { list: devices, at: Date.now() }
+      const n = resolveEffectiveAvfoundationIndex(devices)
+      if (n != null) {
+        const ffmpeg = findFfmpegExecutable()
+        if (!ffmpeg) {
+          console.error(
+            '[inear] captura DirectShow: ffmpeg não encontrado (PATH ou INEAR_FFMPEG).',
+          )
+        } else {
+          const mode = state.captureAvfoundationMode || 'auto'
+          const devName = devices.find((d) => d.index === n)?.name || ''
+          if (!devName) {
+            console.error('[inear] DirectShow: nome de dispositivo vazio para índice', n)
+          } else {
+            if (state.captureChannelCountAuto !== false) {
+              const probed = probeDshowInputChannelsResult(devName).channels
+              if (probed && probed >= 1) {
+                const next = Math.min(MVP_MAX_CAPTURE_CHANNELS, probed)
+                if (next !== state.captureChannelCount) {
+                  console.info(
+                    `[inear] DirectShow "${devName}" — ffprobe detetou ${probed} entradas PCM; captureChannelCount=${next}`,
+                  )
+                  state.captureChannelCount = next
+                  saveState(userData, state)
+                }
+              }
+            }
+            const nCh = normalizeCaptureChannelCount()
+            const args = [
+              '-nostats',
+              '-loglevel',
+              'error',
+              '-fflags',
+              'nobuffer',
+              '-flags',
+              'low_delay',
+              '-f',
+              'dshow',
+              '-i',
+              dshowAudioInputSpecifier(devName),
+              '-ar',
+              String(MVP_SAMPLE_RATE_HZ),
+              '-ac',
+              String(nCh),
+              '-f',
+              's16le',
+              '-',
+            ]
+            console.info(
+              `[inear] captura do PC (DirectShow ${mode}, "${devName}", ${nCh}ch)`,
+              ffmpeg,
+            )
+            captureChild = spawn(ffmpeg, args, {
+              stdio: ['ignore', 'pipe', 'inherit'],
+              env: augmentPathForFfmpeg(process.env),
+              windowsHide: true,
+            })
+            captureChild.stdout.on('data', pushCaptureChunk)
+            captureChild.on('error', (err) =>
+              console.error('[inear] captura DirectShow spawn:', err.message),
+            )
+            captureChild.on('exit', (code, sig) =>
+              console.warn('[inear] captura DirectShow terminou', { code, sig }),
+            )
+            return
+          }
+        }
+      } else if ((state.captureAvfoundationMode || 'auto') !== 'off') {
+        console.info(
+          '[inear] DirectShow: sem entrada resolvida (lista vazia ou heurística sem correspondência). Opcional: INEAR_CAPTURE_DEVICE_SUBSTRING, modo manual no painel, instalar ffmpeg no PATH, ou INEAR_CAPTURE_CMD.',
+        )
+      }
+    }
+
     console.info(
-      '[inear] captura do PC: desligada (senoides). macOS: Entrada Mac (auto/manual) ou INEAR_CAPTURE_CMD — ver README.',
+      '[inear] captura do PC: desligada (senoides). macOS: Entrada Mac (AVFoundation); Windows: DirectShow (ffmpeg no PATH); ou INEAR_CAPTURE_CMD — ver README.',
     )
   }
 
@@ -1197,6 +1756,10 @@ function createServices(app) {
     return state.users.find((u) => u.username === username)
   }
 
+  function hasAdminUser() {
+    return state.users.some((u) => u.role === 'admin')
+  }
+
   function signToken(payload) {
     return jwt.sign(payload, state.jwtSecret, { expiresIn: '12h' })
   }
@@ -1227,11 +1790,76 @@ function createServices(app) {
   ex.get('/api/health', (_req, res) => {
     res.json({ ok: true, uptime: process.uptime() })
   })
+  ex.get('/api/setup/status', (_req, res) => {
+    res.json({ required: !hasAdminUser() })
+  })
+  ex.post('/api/setup/bootstrap', loginLimiter, (req, res) => {
+    if (hasAdminUser()) {
+      return res.status(409).json({ error: 'already_initialized' })
+    }
+    const body = req.body || {}
+    const username = String(body.username || '').trim()
+    const password = String(body.password || '')
+    if (!username || !password) {
+      return res.status(400).json({ error: 'missing_fields' })
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'weak_password' })
+    }
+    if (findUserByUsername(username) || findMusicianByUsername(username)) {
+      return res.status(409).json({ error: 'username_exists' })
+    }
+    state.users.push({
+      username,
+      passwordHash: bcrypt.hashSync(password, 10),
+      role: 'admin',
+    })
+    // Segurança e previsibilidade: reset de pairing e músicos default.
+    state.pairing = null
+    state.showfile.musicians = []
+    saveState(userData, state)
+    const token = signToken({ sub: username, role: 'admin' })
+    res.json({ ok: true, token, role: 'admin' })
+  })
+
+  /**
+   * @param {{ index: number, name: string }} d
+   * @param {{ force?: boolean }} opts
+   * @returns {{ channels: number | null, error: string | null }}
+   */
+  function probeCaptureRowResult(d, opts) {
+    if (process.platform === 'darwin') {
+      return probeAvfoundationInputChannelsResult(d.index, opts)
+    }
+    if (process.platform === 'win32') {
+      return probeDshowInputChannelsResult(d.name, opts)
+    }
+    return { channels: null, error: null }
+  }
+
+  /**
+   * @param {{ index: number, name: string }} d
+   * @param {{ force?: boolean }} opts
+   * @returns {Promise<{ channels: number | null, error: string | null }>}
+   */
+  async function probeCaptureRowResultAsync(d, opts) {
+    if (process.platform === 'darwin') {
+      return probeAvfoundationInputChannelsResultAsync(d.index, opts)
+    }
+    if (process.platform === 'win32') {
+      return probeDshowInputChannelsResultAsync(d.name, opts)
+    }
+    return { channels: null, error: null }
+  }
+
   ex.get('/api/session', authMiddleware, (_req, res) => {
     const envOn = Boolean(String(process.env.INEAR_CAPTURE_CMD || '').trim())
-    const devices = listAvfoundationCached()
-    const meta = computeAvfCaptureMeta(devices)
-    const configured = envOn || meta.captureSource === 'avfoundation'
+    const devices = listPcAudioCaptureDevicesCached()
+    const meta = computePcCaptureMeta(devices)
+    const configured =
+      envOn ||
+      meta.captureSource === 'avfoundation' ||
+      meta.captureSource === 'dshow'
     const receiving =
       configured && captureChild && !captureChild.killed
         ? Date.now() - lastGoodCaptureMs < 3000
@@ -1251,13 +1879,17 @@ function createServices(app) {
       captureAvfoundationAutoPicked: meta.autoPicked,
       captureChannelCount: normalizeCaptureChannelCount(),
       captureChannelCountAuto: state.captureChannelCountAuto !== false,
+      audioBlockSamples: clampAudioBlockSamples(state.audioBlockSamples),
     })
   })
   ex.get('/api/audio-input-levels', authMiddleware, (_req, res) => {
     const envOn = Boolean(String(process.env.INEAR_CAPTURE_CMD || '').trim())
-    const devices = listAvfoundationCached()
-    const meta = computeAvfCaptureMeta(devices)
-    const configured = envOn || meta.captureSource === 'avfoundation'
+    const devices = listPcAudioCaptureDevicesCached()
+    const meta = computePcCaptureMeta(devices)
+    const configured =
+      envOn ||
+      meta.captureSource === 'avfoundation' ||
+      meta.captureSource === 'dshow'
     const receiving =
       configured && captureChild && !captureChild.killed
         ? Date.now() - lastGoodCaptureMs < 3000
@@ -1275,9 +1907,9 @@ function createServices(app) {
       const rawRefresh = q.refresh
       const refreshStr = Array.isArray(rawRefresh) ? rawRefresh[0] : rawRefresh
       const refreshProbe = refreshStr === '1' || refreshStr === 'true'
-      if (refreshProbe) bustAvfCache()
-      const devices = listAvfoundationCached()
-      const meta = computeAvfCaptureMeta(devices)
+      if (refreshProbe) bustPcCaptureCaches()
+      const devices = listPcAudioCaptureDevicesCached()
+      const meta = computePcCaptureMeta(devices)
       const suggestion = pickPreferredAvfoundationDevice(devices)
       const manualIdx =
         (state.captureAvfoundationMode || 'auto') === 'manual'
@@ -1286,13 +1918,15 @@ function createServices(app) {
       const rawProbe = q.probe
       const probeStr = Array.isArray(rawProbe) ? rawProbe[0] : rawProbe
       const probeAll = probeStr === 'all' || probeStr === '1'
+      const ffmpegFound = Boolean(findFfmpegExecutable())
       const ffprobeFound = Boolean(findFfprobeExecutable())
+      const usingBundledWinFfmpeg = process.platform === 'win32' && Boolean(getBundledWinFfmpegDir())
       /** @type {{ index: number, name: string, inputChannels: number | null, probeError: string | null }[]} */
       let devicesWithInputs
       if (probeAll) {
         devicesWithInputs = await Promise.all(
           devices.map(async (d) => {
-            const pr = await probeAvfoundationInputChannelsResultAsync(d.index, {
+            const pr = await probeCaptureRowResultAsync(d, {
               force: refreshProbe,
             })
             return {
@@ -1311,13 +1945,19 @@ function createServices(app) {
           let inputChannels = null
           let probeError = null
           if (shouldProbe) {
-            const pr = probeAvfoundationInputChannelsResult(d.index, {
+            const pr = probeCaptureRowResult(d, {
               force: refreshProbe,
             })
             inputChannels = pr.channels
             probeError = pr.error
-          } else {
+          } else if (process.platform === 'darwin') {
             const hit = avfInputChannelsProbeCache.get(d.index)
+            if (hit && Date.now() - hit.at < AVF_PROBE_TTL_MS) {
+              inputChannels = hit.channels
+              probeError = hit.error
+            }
+          } else if (process.platform === 'win32') {
+            const hit = dshowInputChannelsProbeCache.get(d.name)
             if (hit && Date.now() - hit.at < AVF_PROBE_TTL_MS) {
               inputChannels = hit.channels
               probeError = hit.error
@@ -1328,7 +1968,10 @@ function createServices(app) {
       }
       let effectiveProbedInputChannels = null
       let effectiveProbeError = null
-      if (meta.captureSource === 'avfoundation' && meta.effectiveIndex != null) {
+      const activeNativeCapture =
+        (meta.captureSource === 'avfoundation' || meta.captureSource === 'dshow') &&
+        meta.effectiveIndex != null
+      if (activeNativeCapture) {
         if (probeAll) {
           const row = devicesWithInputs.find((x) => x.index === meta.effectiveIndex)
           if (row) {
@@ -1336,15 +1979,18 @@ function createServices(app) {
             effectiveProbeError = row.probeError
           }
         } else {
-          const er = probeAvfoundationInputChannelsResult(meta.effectiveIndex, {
-            force: refreshProbe,
-          })
+          const effRow = devices.find((x) => x.index === meta.effectiveIndex)
+          const er = effRow
+            ? probeCaptureRowResult(effRow, { force: refreshProbe })
+            : { channels: null, error: 'índice sem dispositivo na lista' }
           effectiveProbedInputChannels = er.channels
           effectiveProbeError = er.error
         }
       }
       res.json({
         platform: process.platform,
+        ffmpegFound,
+        usingBundledWinFfmpeg,
         ffprobeFound,
         devices: devicesWithInputs,
         captureSource: meta.captureSource,
@@ -1493,7 +2139,7 @@ function createServices(app) {
     } else {
       state.captureAvfoundationAudioIndex = null
     }
-    bustAvfCache()
+    bustPcCaptureCaches()
     saveState(userData, state)
     startCaptureIfConfigured()
     res.json({
@@ -1637,14 +2283,17 @@ function createServices(app) {
       return res.status(403).json({ error: 'forbidden' })
     }
     const envOn = Boolean(String(process.env.INEAR_CAPTURE_CMD || '').trim())
-    const devices = listAvfoundationCached()
-    const meta = computeAvfCaptureMeta(devices)
-    const captureOk = envOn || meta.captureSource === 'avfoundation'
+    const devices = listPcAudioCaptureDevicesCached()
+    const meta = computePcCaptureMeta(devices)
+    const captureOk =
+      envOn ||
+      meta.captureSource === 'avfoundation' ||
+      meta.captureSource === 'dshow'
     if (!captureOk) {
       return res.status(400).json({
         error: 'capture_required',
         message:
-          'Ativa primeiro a captura (Entrada Mac ou INEAR_CAPTURE_CMD) para sincronizar os canais da interface.',
+          'Ativa primeiro a captura (entrada de áudio no painel ou INEAR_CAPTURE_CMD) para sincronizar os canais da interface.',
       })
     }
     const body = req.body || {}
@@ -1744,7 +2393,13 @@ function createServices(app) {
     if (!ch) return res.status(404).json({ error: 'not_found' })
     const b = req.body || {}
     for (const k of ['gain', 'pan', 'mute', 'lockEq', 'name', 'icon']) {
-      if (b[k] !== undefined) ch[k] = b[k]
+      if (b[k] === undefined) continue
+      if (k === 'gain') {
+        const g = Number(b.gain)
+        ch.gain = Math.max(0, Math.min(4, Number.isFinite(g) ? g : ch.gain))
+        continue
+      }
+      ch[k] = b[k]
     }
     if (b.color !== undefined) {
       ch.color = normalizeChannelColor(b.color)
@@ -1800,15 +2455,31 @@ function createServices(app) {
       }
     }
   }
+  function sanitizeSendGainsInput(partial) {
+    const out = {}
+    for (const [k, raw] of Object.entries(partial || {})) {
+      const n = Number(raw)
+      if (!Number.isFinite(n)) continue
+      out[k] = Math.max(0, Math.min(4, n))
+    }
+    return out
+  }
 
   ex.patch('/api/showfile/musician/:id', authMiddleware, (req, res) => {
     const m = state.showfile.musicians.find((x) => x.id === req.params.id)
     if (!m) return res.status(404).json({ error: 'not_found' })
     if (req.user.role === 'admin') {
       const b = req.body || {}
-      for (const k of ['sendGains', 'sendMutes', 'mute', 'name', 'scope']) {
-        if (b[k] !== undefined) m[k] = b[k]
+      // Mesmo que o músico: PATCH envia só uma chave em sendGains/sendMutes — tem de fazer merge.
+      if (b.sendGains && typeof b.sendGains === 'object') {
+        m.sendGains = { ...m.sendGains, ...sanitizeSendGainsInput(b.sendGains) }
       }
+      if (b.sendMutes && typeof b.sendMutes === 'object') {
+        m.sendMutes = { ...m.sendMutes, ...b.sendMutes }
+      }
+      if (typeof b.mute === 'boolean') m.mute = b.mute
+      if (b.name !== undefined) m.name = b.name
+      if (b.scope !== undefined) m.scope = b.scope
       if (b.eqByChannel && typeof b.eqByChannel === 'object') {
         mergeMusicianEqByChannel(m, b.eqByChannel, true)
       }
@@ -1818,7 +2489,9 @@ function createServices(app) {
         return res.status(403).json({ error: 'forbidden' })
       }
       const body = req.body || {}
-      if (body.sendGains) m.sendGains = { ...m.sendGains, ...body.sendGains }
+      if (body.sendGains) {
+        m.sendGains = { ...m.sendGains, ...sanitizeSendGainsInput(body.sendGains) }
+      }
       if (body.sendMutes) m.sendMutes = { ...m.sendMutes, ...body.sendMutes }
       if (typeof body.mute === 'boolean') m.mute = body.mute
       if (body.eqByChannel && typeof body.eqByChannel === 'object') {
@@ -1831,11 +2504,74 @@ function createServices(app) {
     res.json(m)
   })
   ex.post('/api/telemetry', authMiddleware, (req, res) => {
-    const { gaps, underruns, rttMs } = req.body || {}
-    if (gaps || underruns || rttMs) {
-      console.info('[telemetry]', req.user.sub, { gaps, underruns, rttMs })
+    const sub = req.user.sub
+    const b = req.body || {}
+    const rttRaw = b.rttMs
+    const rtt =
+      typeof rttRaw === 'number' && Number.isFinite(rttRaw)
+        ? Math.max(0, Math.min(5000, rttRaw))
+        : 0
+    const seqGaps =
+      typeof b.sequenceGaps === 'number' && Number.isFinite(b.sequenceGaps)
+        ? Math.max(0, Math.floor(b.sequenceGaps))
+        : 0
+    const prev = telemetryBySub.get(sub) || {
+      lastReportSeqGaps: /** @type {number | null} */ (null),
+      samples: [],
+    }
+    let gapsDelta = 0
+    if (prev.lastReportSeqGaps != null) {
+      gapsDelta = Math.max(0, seqGaps - prev.lastReportSeqGaps)
+    }
+    prev.lastReportSeqGaps = seqGaps
+    prev.samples.push({
+      t: Date.now(),
+      rtt,
+      gapsDelta,
+    })
+    if (prev.samples.length > 40) {
+      prev.samples.splice(0, prev.samples.length - 40)
+    }
+    telemetryBySub.set(sub, prev)
+    if (rtt > 200 || gapsDelta > 2) {
+      console.info('[telemetry]', sub, { rttMs: rtt, gapsDelta, sequenceGaps: seqGaps })
     }
     res.json({ ok: true })
+  })
+
+  ex.get('/api/network-quality', authMiddleware, (req, res) => {
+    if (req.user.role === 'admin') {
+      const byUsername = {}
+      for (const u of state.users) {
+        if (u.role !== 'musician') continue
+        const samp = telemetryBySub.get(u.username)?.samples
+        byUsername[u.username] = computeQualityFromSamples(samp)
+      }
+      return res.json({ self: null, byUsername })
+    }
+    if (req.user.role === 'musician') {
+      const samp = telemetryBySub.get(req.user.sub)?.samples
+      return res.json({
+        self: computeQualityFromSamples(samp),
+        byUsername: {},
+      })
+    }
+    return res.status(403).json({ error: 'forbidden' })
+  })
+
+  ex.patch('/api/audio-engine', authMiddleware, (req, res) => {
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'forbidden' })
+    }
+    const b = req.body || {}
+    if (b.audioBlockSamples !== undefined) {
+      state.audioBlockSamples = clampAudioBlockSamples(b.audioBlockSamples)
+      saveState(userData, state)
+    }
+    res.json({
+      ok: true,
+      audioBlockSamples: clampAudioBlockSamples(state.audioBlockSamples),
+    })
   })
 
   const httpServer = http.createServer(ex)
@@ -1920,7 +2656,7 @@ function createServices(app) {
               t: 'hello',
               musicianId: mid,
               sampleRateHz: MVP_SAMPLE_RATE_HZ,
-              blockSamples: frameSizeForProfile(),
+              blockSamples: audioBlockSamples(),
               latencyProfile,
             }),
           )
@@ -1976,7 +2712,7 @@ function createServices(app) {
   })
 
   function audioTick() {
-    const block = frameSizeForProfile()
+    const block = audioBlockSamples()
     const delay = (1000 * block) / MVP_SAMPLE_RATE_HZ
     const base = sampleClock
     sampleClock += block
@@ -2085,7 +2821,7 @@ function createServices(app) {
     }
     audioTimeout = setTimeout(audioTick, Math.max(0, nextAudioTickAt - now))
   }
-  nextAudioTickAt = Date.now() + (1000 * frameSizeForProfile()) / MVP_SAMPLE_RATE_HZ
+  nextAudioTickAt = Date.now() + (1000 * audioBlockSamples()) / MVP_SAMPLE_RATE_HZ
   audioTick()
 
   function shutdown() {

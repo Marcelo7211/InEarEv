@@ -1,6 +1,9 @@
 const { app, BrowserWindow } = require('electron')
 const path = require('path')
 
+/** Pasta %APPDATA%\\inEar Desktop (alinha com NSIS e documentação). */
+app.setName('inEar Desktop')
+
 let services
 
 function createWindow() {
