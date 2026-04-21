@@ -5,7 +5,7 @@
   "main": "main-process/main.cjs",
   "scripts": {
     "postinstall": "node scripts/postinstall-ffmpeg-win-optional.cjs",
-    "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 node scripts/run-electron.cjs\"",
+    "dev": "concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 node scripts/run-electron.cjs\"",
     "build:renderer": "vite build",
     "build": "npm run build:renderer",
     "typecheck": "tsc -p tsconfig.json --noEmit",

@@ -2671,7 +2671,7 @@ function createServices(app) {
       await pc.setRemoteDescription(new wrtc.RTCSessionDescription({ type: 'offer', sdp }))
       const answer = await pc.createAnswer()
       await pc.setLocalDescription(answer)
-      await waitIceGatheringComplete(pc)
+      await waitIceGatheringComplete(pc, 350)
       webrtcSessions.set(sessionId, { id: strip.id, pc, source, track })
       let bucket = webrtcSessionsByMusician.get(strip.id)
       if (!bucket) {

@@ -20,6 +20,13 @@ class InEarRepository(
         .writeTimeout(30, TimeUnit.SECONDS)
         .build(),
 ) {
+    /** Sinalização WebRTC: falha rápido para não bloquear a corrida UDP/WS. */
+    private val webrtcSignalingClient: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(800, TimeUnit.MILLISECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .writeTimeout(3, TimeUnit.SECONDS)
+        .build()
+
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
     suspend fun login(apiBase: String, username: String, password: String): LoginResponse {
@@ -149,7 +156,7 @@ class InEarRepository(
             .post(body)
             .build()
         return withContext(Dispatchers.IO) {
-            client.newCall(req).execute().use { resp ->
+            webrtcSignalingClient.newCall(req).execute().use { resp ->
                 val text = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) error("webrtc offer ${resp.code}: $text")
                 apiJson.decodeFromString<WebRtcAnswerResponse>(text)

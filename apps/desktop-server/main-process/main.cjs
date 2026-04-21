@@ -4,6 +4,15 @@ const path = require('path')
 /** Pasta %APPDATA%\\inEar Desktop (alinha com NSIS e documentação). */
 app.setName('inEar Desktop')
 
+// Windows: evita edge cases IPv6 (::1) e instabilidade do stack com "localhost" no Chromium.
+if (process.platform === 'win32') {
+  try {
+    app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess')
+  } catch {
+    /* ignore */
+  }
+}
+
 let services
 /** Última janela principal (para IPC e getUserMedia). */
 let mainWindowRef = null
@@ -92,6 +101,20 @@ async function requestCaptureAudioPermission(win) {
   }
 }
 
+function normalizeDevServerUrl(url) {
+  if (!url || process.platform !== 'win32') return url
+  try {
+    const u = new URL(url)
+    if (u.hostname === 'localhost') {
+      u.hostname = '127.0.0.1'
+      return u.toString()
+    }
+  } catch {
+    /* ignore */
+  }
+  return url
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -110,9 +133,43 @@ function createWindow() {
     })
   })
 
+  /** Recuperação após "Network service crashed" ou falha transitória ao carregar o Vite. */
+  let reloadAttempts = 0
+  const maxReloadAttempts = 4
+  win.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) return
+    const devUrl = process.env.VITE_DEV_SERVER_URL
+    if (!devUrl) return
+    console.warn(
+      '[inear] Falha ao carregar a UI (Electron):',
+      errorCode,
+      errorDescription,
+      validatedURL,
+    )
+    if (reloadAttempts >= maxReloadAttempts) return
+    reloadAttempts += 1
+    const target = normalizeDevServerUrl(devUrl)
+    setTimeout(() => {
+      if (win.isDestroyed()) return
+      void win.loadURL(target).catch(() => {})
+    }, 600)
+  })
+  win.webContents.on('render-process-gone', (_event, details) => {
+    if (details.reason !== 'crashed' && details.reason !== 'killed') return
+    const devUrl = process.env.VITE_DEV_SERVER_URL
+    if (!devUrl || reloadAttempts >= maxReloadAttempts) return
+    console.warn('[inear] Processo de renderização terminou:', details.reason)
+    reloadAttempts += 1
+    const target = normalizeDevServerUrl(devUrl)
+    setTimeout(() => {
+      if (win.isDestroyed()) return
+      void win.loadURL(target).catch(() => {})
+    }, 400)
+  })
+
   const devUrl = process.env.VITE_DEV_SERVER_URL
   if (devUrl) {
-    win.loadURL(devUrl)
+    win.loadURL(normalizeDevServerUrl(devUrl))
     win.webContents.openDevTools({ mode: 'detach' })
   } else {
     win.loadFile(path.join(__dirname, '../dist/renderer/index.html'))

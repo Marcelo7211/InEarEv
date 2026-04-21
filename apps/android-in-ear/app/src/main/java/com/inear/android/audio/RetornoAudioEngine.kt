@@ -4,12 +4,15 @@ import android.media.AudioManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -23,6 +26,8 @@ import java.net.SocketTimeoutException
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -38,6 +43,12 @@ import com.inear.android.net.InEarRepository
 
 private const val UDP_CONTROL_PORT = 9877
 private const val SAMPLE_RATE = 48_000
+
+private enum class RingTransport {
+    UDP,
+    WS,
+    WEBRTC,
+}
 
 data class RetornoStats(
     val transport: String = "off",
@@ -85,10 +96,8 @@ class RetornoAudioEngine(
             lastSeq = null
             _stats.value = RetornoStats(transport = "starting", connected = false, playing = false)
             try {
-                if (tryWebRtc(apiBase, token, latency)) return@launch
                 val host = URL(apiBase.trim().trimEnd('/')).host
-                if (tryUdp(host, token, latency)) return@launch
-                tryWebSocket(apiBase, token, latency)
+                startTransportRace(apiBase, host, token, latency)
             } catch (e: Exception) {
                 _stats.value = RetornoStats(
                     transport = "error",
@@ -130,12 +139,264 @@ class RetornoAudioEngine(
         _stats.value = RetornoStats()
     }
 
-    private suspend fun tryWebRtc(apiBase: String, token: String, latency: String): Boolean {
-        if (!ensureWebRtcFactory(appContext)) return false
-        val pcFactory = sharedPcFactory ?: return false
+    private suspend fun startTransportRace(
+        apiBase: String,
+        host: String,
+        token: String,
+        latency: String,
+    ) {
+        val winRef = AtomicReference<RingTransport?>(null)
+        val settled = CompletableDeferred<RingTransport>()
+        val winLock = Any()
+
+        fun tryWin(t: RingTransport): Boolean {
+            synchronized(winLock) {
+                if (winRef.get() != null) return false
+                winRef.set(t)
+                settled.complete(t)
+                return true
+            }
+        }
+
+        fun otherWon(me: RingTransport): Boolean {
+            val w = winRef.get()
+            return w != null && w != me
+        }
+
+        val jUdp = scope.launch(Dispatchers.IO) {
+            runUdpRace(host, token, latency, me = RingTransport.UDP, ::tryWin, ::otherWon)
+        }
+        val jWs = scope.launch(Dispatchers.IO) {
+            runWsRace(apiBase, token, latency, me = RingTransport.WS, ::tryWin, ::otherWon)
+        }
+        val jRtc = scope.launch(Dispatchers.IO) {
+            runRtcRace(apiBase, token, latency, me = RingTransport.WEBRTC, winRef, ::tryWin, ::otherWon)
+        }
+
+        val picked = withTimeoutOrNull(12_000) { settled.await() }
+        jUdp.cancel()
+        jWs.cancel()
+        jRtc.cancel()
+        jUdp.join()
+        jWs.join()
+        jRtc.join()
+
+        if (picked == null && !settled.isCompleted) {
+            running = false
+            stopInternal()
+            _stats.value = RetornoStats(
+                transport = "error",
+                connected = false,
+                playing = false,
+                lastError = "sem transporte (timeout)",
+            )
+        }
+    }
+
+    private suspend fun runUdpRace(
+        host: String,
+        token: String,
+        latency: String,
+        me: RingTransport,
+        tryWin: (RingTransport) -> Boolean,
+        otherWon: (RingTransport) -> Boolean,
+    ) {
+        if (otherWon(me)) return
+        val socket = DatagramSocket()
+        try {
+            val reg = """{"t":"reg","token":"$token"}""".toByteArray(StandardCharsets.UTF_8)
+            socket.send(
+                DatagramPacket(reg, reg.size, InetAddress.getByName(host), UDP_CONTROL_PORT),
+            )
+            val buf = ByteArray(65536)
+            val deadline = System.currentTimeMillis() + 5000
+            while (running && System.currentTimeMillis() < deadline) {
+                if (otherWon(me)) return
+                socket.soTimeout = 120
+                try {
+                    val p = DatagramPacket(buf, buf.size)
+                    socket.receive(p)
+                    if (otherWon(me)) return
+                    if (p.length < Ine1Decoder.HEADER_BYTES) continue
+                    val frame = Ine1Decoder.tryDecode(buf, 0, p.length) ?: continue
+                    if (!tryWin(me)) {
+                        return
+                    }
+                    udpSocket = socket
+                    sink.start(latency)
+                    onIne1Frame(frame)
+                    _stats.value = RetornoStats(
+                        transport = "udp",
+                        connected = true,
+                        playing = true,
+                        lastError = null,
+                        queuedFrames = sink.queuedFrames(),
+                    )
+                    val rcv = socket
+                    recvThread = thread(name = "inear-udp") {
+                        val localBuf = ByteArray(65536)
+                        while (running && !Thread.currentThread().isInterrupted) {
+                            try {
+                                rcv.soTimeout = 5000
+                                val pkt = DatagramPacket(localBuf, localBuf.size)
+                                rcv.receive(pkt)
+                                val f = Ine1Decoder.tryDecode(localBuf, 0, pkt.length) ?: continue
+                                onIne1Frame(f)
+                            } catch (_: SocketTimeoutException) {
+                                continue
+                            } catch (_: Exception) {
+                                break
+                            }
+                        }
+                    }
+                    return
+                } catch (_: SocketTimeoutException) {
+                    continue
+                }
+            }
+        } catch (_: Exception) {
+            /* ignore */
+        } finally {
+            if (udpSocket !== socket) {
+                try {
+                    socket.close()
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+
+    private suspend fun runWsRace(
+        apiBase: String,
+        token: String,
+        latency: String,
+        me: RingTransport,
+        tryWin: (RingTransport) -> Boolean,
+        otherWon: (RingTransport) -> Boolean,
+    ) {
+        if (otherWon(me)) return
+        val u = URL(apiBase.trim().trimEnd('/'))
+        val wsScheme = if (u.protocol == "https") "wss" else "ws"
+        val port = when (u.port) {
+            -1 -> 3847
+            else -> u.port
+        }
+        val lat = if (latency == "low") "low" else "stable"
+        val wsUrl =
+            "$wsScheme://${u.host}:$port/api/stream/audio?token=" +
+                java.net.URLEncoder.encode(token, Charsets.UTF_8.name()) +
+                "&latency=" + java.net.URLEncoder.encode(lat, Charsets.UTF_8.name())
+        withTimeoutOrNull(4500L) {
+            suspendCancellableCoroutine { cont ->
+                val waitDone = AtomicBoolean(false)
+                fun endWsWait() {
+                    if (waitDone.compareAndSet(false, true) && cont.isActive) {
+                        cont.resume(Unit) {}
+                    }
+                }
+                if (otherWon(me)) {
+                    endWsWait()
+                    return@suspendCancellableCoroutine
+                }
+                val req = Request.Builder().url(wsUrl).build()
+                val call = httpClient.newWebSocket(
+                    req,
+                    object : WebSocketListener() {
+                        override fun onOpen(webSocket: WebSocket, response: Response) {
+                            if (otherWon(me) || !running) {
+                                try {
+                                    webSocket.close(1000, "abort")
+                                } catch (_: Exception) {
+                                }
+                                endWsWait()
+                            }
+                        }
+
+                        override fun onMessage(webSocket: WebSocket, text: String) {}
+
+                        override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                            if (!running || otherWon(me)) {
+                                try {
+                                    webSocket.close(1000, "abort")
+                                } catch (_: Exception) {
+                                }
+                                endWsWait()
+                                return
+                            }
+                            val arr = bytes.toByteArray()
+                            val frame = Ine1Decoder.tryDecode(arr, 0, arr.size) ?: return
+                            if (!tryWin(me)) {
+                                try {
+                                    webSocket.close(1000, "lost-race")
+                                } catch (_: Exception) {
+                                }
+                                endWsWait()
+                                return
+                            }
+                            ws = webSocket
+                            sink.start(lat)
+                            onIne1Frame(frame)
+                            _stats.value = RetornoStats(
+                                transport = "ws",
+                                connected = true,
+                                playing = true,
+                                lastError = null,
+                                queuedFrames = sink.queuedFrames(),
+                            )
+                            endWsWait()
+                        }
+
+                        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                            endWsWait()
+                        }
+
+                        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                            try {
+                                webSocket.close(1000, null)
+                            } catch (_: Exception) {
+                            }
+                        }
+                    },
+                )
+                cont.invokeOnCancellation {
+                    try {
+                        call.cancel()
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun runRtcRace(
+        apiBase: String,
+        token: String,
+        @Suppress("UNUSED_PARAMETER") latency: String,
+        me: RingTransport,
+        winRef: AtomicReference<RingTransport?>,
+        tryWin: (RingTransport) -> Boolean,
+        otherWon: (RingTransport) -> Boolean,
+    ) {
+        withTimeoutOrNull(6500L) {
+            runRtcRaceInner(apiBase, token, me, winRef, tryWin, otherWon)
+        }
+    }
+
+    private suspend fun runRtcRaceInner(
+        apiBase: String,
+        token: String,
+        me: RingTransport,
+        winRef: AtomicReference<RingTransport?>,
+        tryWin: (RingTransport) -> Boolean,
+        otherWon: (RingTransport) -> Boolean,
+    ) {
         var peer: PeerConnection? = null
-        var gotAudioTrack = false
-        return try {
+        val gotAudioTrack = AtomicBoolean(false)
+        try {
+            if (otherWon(me)) return
+            if (!ensureWebRtcFactory(appContext)) return
+            val pcFactory = sharedPcFactory ?: return
+            if (otherWon(me)) return
             val rtcConfig = PeerConnection.RTCConfiguration(emptyList()).apply {
                 sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             }
@@ -161,8 +422,7 @@ class RetornoAudioEngine(
                         if (track is AudioTrack) {
                             track.setEnabled(true)
                             forceSpeakerRoute()
-                            gotAudioTrack = true
-                            _stats.update { it.copy(transport = "webrtc", connected = true, playing = true, lastError = null) }
+                            gotAudioTrack.set(true)
                         }
                     }
                     override fun onTrack(transceiver: RtpTransceiver) {
@@ -170,128 +430,116 @@ class RetornoAudioEngine(
                         if (tr is AudioTrack) {
                             tr.setEnabled(true)
                             forceSpeakerRoute()
-                            gotAudioTrack = true
-                            _stats.update { it.copy(transport = "webrtc", connected = true, playing = true, lastError = null) }
+                            gotAudioTrack.set(true)
                         }
                     }
                 },
-            ) ?: return false
+            ) ?: return
+            if (otherWon(me)) {
+                try {
+                    created.close()
+                } catch (_: Exception) {
+                }
+                return
+            }
             peer = created
             pc = created
             val transInit = RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
             created.addTransceiver(org.webrtc.MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO, transInit)
             val offer = createOffer(created)
             setLocal(created, offer)
-            // LAN: espera breve para coletar candidates host no SDP.
-            kotlinx.coroutines.delay(500)
-            val localSdp = created.localDescription?.description ?: offer.description
-            val ans = repository.createWebRtcAnswer(apiBase, token, localSdp)
-            if (ans.sdp.isBlank()) {
+            if (otherWon(me)) {
                 try {
                     created.close()
                 } catch (_: Exception) {
                 }
                 pc = null
-                return false
+                return
+            }
+            waitIceGatheringCapMs(created, maxWaitMs = 280L)
+            val localSdp = created.localDescription?.description ?: offer.description
+            val ans = repository.createWebRtcAnswer(apiBase, token, localSdp)
+            if (otherWon(me) || ans.sdp.isBlank()) {
+                try {
+                    created.close()
+                } catch (_: Exception) {
+                }
+                pc = null
+                return
             }
             setRemote(created, SessionDescription(SessionDescription.Type.ANSWER, ans.sdp))
             forceSpeakerRoute()
-            _stats.update {
-                it.copy(transport = "webrtc", connected = true, playing = gotAudioTrack, queuedFrames = 0)
-            }
-            // Se não houver track em breve, deixa fallback UDP/WebSocket atuar.
-            kotlinx.coroutines.delay(1200)
-            if (!gotAudioTrack) {
+            waitUntilTrueOrTimeout({ gotAudioTrack.get() || otherWon(me) }, maxWaitMs = 900L, pollMs = 12L)
+            if (otherWon(me)) {
                 try {
                     created.close()
                 } catch (_: Exception) {
                 }
                 pc = null
                 restoreAudioRoute()
-                _stats.update { it.copy(connected = false, playing = false, lastError = "webrtc sem track de audio") }
-                false
-            } else {
-                true
+                return
             }
-        } catch (e: Exception) {
+            if (!gotAudioTrack.get()) {
+                try {
+                    created.close()
+                } catch (_: Exception) {
+                }
+                pc = null
+                restoreAudioRoute()
+                return
+            }
+            if (!tryWin(me)) {
+                try {
+                    created.close()
+                } catch (_: Exception) {
+                }
+                pc = null
+                restoreAudioRoute()
+                return
+            }
+            _stats.update {
+                it.copy(transport = "webrtc", connected = true, playing = true, lastError = null, queuedFrames = 0)
+            }
+        } catch (_: Exception) {
             try {
                 peer?.close()
             } catch (_: Exception) {
             }
-            pc = null
+            if (pc === peer) pc = null
             restoreAudioRoute()
-            _stats.update {
-                RetornoStats(
-                    transport = "webrtc",
-                    connected = false,
-                    playing = false,
-                    lastError = e.message,
-                )
+        } finally {
+            if (winRef.get() != RingTransport.WEBRTC && peer != null) {
+                try {
+                    peer.close()
+                } catch (_: Exception) {
+                }
+                if (pc === peer) pc = null
+                restoreAudioRoute()
             }
-            false
         }
     }
 
-    private fun tryUdp(host: String, token: String, latency: String): Boolean {
-        val socket = DatagramSocket()
-        udpSocket = socket
-        val reg = """{"t":"reg","token":"$token"}""".toByteArray(StandardCharsets.UTF_8)
-        socket.send(
-            DatagramPacket(reg, reg.size, InetAddress.getByName(host), UDP_CONTROL_PORT),
-        )
-        val buf = ByteArray(65536)
-        val deadline = System.currentTimeMillis() + 2800
-        var gotIne1 = false
-        while (running && System.currentTimeMillis() < deadline && !gotIne1) {
-            socket.soTimeout = 400
-            try {
-                val p = DatagramPacket(buf, buf.size)
-                socket.receive(p)
-                if (p.length >= Ine1Decoder.HEADER_BYTES) {
-                    val frame = Ine1Decoder.tryDecode(buf, 0, p.length)
-                    if (frame != null) {
-                        gotIne1 = true
-                        sink.start(latency)
-                        onIne1Frame(frame)
-                    }
-                }
-            } catch (_: SocketTimeoutException) {
-                continue
-            }
+    /** ICE completo ou teto — evita espera fixa longa antes do POST do offer. */
+    private suspend fun waitIceGatheringCapMs(peer: PeerConnection, maxWaitMs: Long) {
+        val deadline = System.currentTimeMillis() + maxWaitMs
+        while (
+            peer.iceGatheringState != PeerConnection.IceGatheringState.COMPLETE &&
+            System.currentTimeMillis() < deadline &&
+            running
+        ) {
+            delay(12L)
         }
-        if (!gotIne1) {
-            try {
-                socket.close()
-            } catch (_: Exception) {
-            }
-            udpSocket = null
-            return false
+    }
+
+    private suspend fun waitUntilTrueOrTimeout(
+        predicate: () -> Boolean,
+        maxWaitMs: Long,
+        pollMs: Long,
+    ) {
+        val deadline = System.currentTimeMillis() + maxWaitMs
+        while (!predicate() && System.currentTimeMillis() < deadline && running) {
+            delay(pollMs)
         }
-        val rcv = socket
-        _stats.value = RetornoStats(
-            transport = "udp",
-            connected = true,
-            playing = true,
-            lastError = null,
-            queuedFrames = sink.queuedFrames(),
-        )
-        recvThread = thread(name = "inear-udp") {
-            val localBuf = ByteArray(65536)
-            while (running && !Thread.currentThread().isInterrupted) {
-                try {
-                    rcv.soTimeout = 5000
-                    val pkt = DatagramPacket(localBuf, localBuf.size)
-                    rcv.receive(pkt)
-                    val frame = Ine1Decoder.tryDecode(localBuf, 0, pkt.length) ?: continue
-                    onIne1Frame(frame)
-                } catch (_: SocketTimeoutException) {
-                    continue
-                } catch (_: Exception) {
-                    break
-                }
-            }
-        }
-        return true
     }
 
     private fun onIne1Frame(frame: Ine1Decoder.Frame) {
@@ -309,58 +557,6 @@ class RetornoAudioEngine(
         sink.writeInterleavedS16(frame.pcmInterleavedS16, frame.pcmInterleavedS16.size)
         _stats.update { s -> s.copy(framesReceived = s.framesReceived + 1) }
         _stats.update { s -> s.copy(queuedFrames = sink.queuedFrames()) }
-    }
-
-    private fun tryWebSocket(apiBase: String, token: String, latency: String) {
-        val u = URL(apiBase.trim().trimEnd('/'))
-        val wsScheme = if (u.protocol == "https") "wss" else "ws"
-        val port = when (u.port) {
-            -1 -> 3847
-            else -> u.port
-        }
-        val lat = if (latency == "low") "low" else "stable"
-        val wsUrl =
-            "$wsScheme://${u.host}:$port/api/stream/audio?token=" +
-                java.net.URLEncoder.encode(token, Charsets.UTF_8.name()) +
-                "&latency=" + java.net.URLEncoder.encode(lat, Charsets.UTF_8.name())
-        sink.start(lat)
-        val req = Request.Builder().url(wsUrl).build()
-        ws = httpClient.newWebSocket(
-            req,
-            object : WebSocketListener() {
-                override fun onOpen(webSocket: WebSocket, response: Response) {
-                    _stats.value = RetornoStats(
-                        transport = "ws",
-                        connected = true,
-                        playing = true,
-                        lastError = null,
-                        queuedFrames = sink.queuedFrames(),
-                    )
-                }
-
-                override fun onMessage(webSocket: WebSocket, text: String) {
-                    // servidor envia hello JSON — taxa fixa MVP 48 kHz
-                }
-
-                override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                    val arr = bytes.toByteArray()
-                    val frame = Ine1Decoder.tryDecode(arr, 0, arr.size) ?: return
-                    onIne1Frame(frame)
-                }
-
-                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    _stats.value = _stats.value.copy(
-                        connected = false,
-                        playing = false,
-                        lastError = t.message,
-                    )
-                }
-
-                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                    webSocket.close(1000, null)
-                }
-            },
-        )
     }
 
     fun setMasterGain(g: Float) {
