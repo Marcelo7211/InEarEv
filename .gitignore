@@ -10,3 +10,6 @@ out/
 # FFmpeg empacotado só no build Windows (binários grandes)
 apps/desktop-server/resources/ffmpeg-win/*.exe
 apps/desktop-server/.cache/
+
+# Saída do electron-builder (instaladores .exe, .app, ffmpeg embutido — > limite GitHub 100 MB)
+apps/desktop-server/release/
