@@ -133,76 +133,103 @@ class RetornoAudioEngine(
     private suspend fun tryWebRtc(apiBase: String, token: String, latency: String): Boolean {
         if (!ensureWebRtcFactory(appContext)) return false
         val pcFactory = sharedPcFactory ?: return false
-        val rtcConfig = PeerConnection.RTCConfiguration(emptyList()).apply {
-            sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
-        }
+        var peer: PeerConnection? = null
         var gotAudioTrack = false
-        val peer = pcFactory.createPeerConnection(
-            rtcConfig,
-            object : PeerConnection.Observer {
-                override fun onSignalingChange(newState: PeerConnection.SignalingState) {}
-                override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState) {
-                    if (newState == PeerConnection.IceConnectionState.FAILED) {
-                        _stats.update { it.copy(lastError = "webrtc ice failed", connected = false) }
+        return try {
+            val rtcConfig = PeerConnection.RTCConfiguration(emptyList()).apply {
+                sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+            }
+            val created = pcFactory.createPeerConnection(
+                rtcConfig,
+                object : PeerConnection.Observer {
+                    override fun onSignalingChange(newState: PeerConnection.SignalingState) {}
+                    override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState) {
+                        if (newState == PeerConnection.IceConnectionState.FAILED) {
+                            _stats.update { it.copy(lastError = "webrtc ice failed", connected = false) }
+                        }
                     }
-                }
-                override fun onIceConnectionReceivingChange(receiving: Boolean) {}
-                override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState) {}
-                override fun onIceCandidate(candidate: org.webrtc.IceCandidate) {}
-                override fun onIceCandidatesRemoved(candidates: Array<out org.webrtc.IceCandidate>) {}
-                override fun onAddStream(stream: org.webrtc.MediaStream) {}
-                override fun onRemoveStream(stream: org.webrtc.MediaStream) {}
-                override fun onDataChannel(dc: org.webrtc.DataChannel) {}
-                override fun onRenegotiationNeeded() {}
-                override fun onAddTrack(receiver: org.webrtc.RtpReceiver, streams: Array<out org.webrtc.MediaStream>) {
-                    val track = receiver.track()
-                    if (track is AudioTrack) {
-                        track.setEnabled(true)
-                        forceSpeakerRoute()
-                        gotAudioTrack = true
-                        _stats.update { it.copy(transport = "webrtc", connected = true, playing = true, lastError = null) }
+                    override fun onIceConnectionReceivingChange(receiving: Boolean) {}
+                    override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState) {}
+                    override fun onIceCandidate(candidate: org.webrtc.IceCandidate) {}
+                    override fun onIceCandidatesRemoved(candidates: Array<out org.webrtc.IceCandidate>) {}
+                    override fun onAddStream(stream: org.webrtc.MediaStream) {}
+                    override fun onRemoveStream(stream: org.webrtc.MediaStream) {}
+                    override fun onDataChannel(dc: org.webrtc.DataChannel) {}
+                    override fun onRenegotiationNeeded() {}
+                    override fun onAddTrack(receiver: org.webrtc.RtpReceiver, streams: Array<out org.webrtc.MediaStream>) {
+                        val track = receiver.track()
+                        if (track is AudioTrack) {
+                            track.setEnabled(true)
+                            forceSpeakerRoute()
+                            gotAudioTrack = true
+                            _stats.update { it.copy(transport = "webrtc", connected = true, playing = true, lastError = null) }
+                        }
                     }
-                }
-                override fun onTrack(transceiver: RtpTransceiver) {
-                    val tr = transceiver.receiver.track()
-                    if (tr is AudioTrack) {
-                        tr.setEnabled(true)
-                        forceSpeakerRoute()
-                        gotAudioTrack = true
-                        _stats.update { it.copy(transport = "webrtc", connected = true, playing = true, lastError = null) }
+                    override fun onTrack(transceiver: RtpTransceiver) {
+                        val tr = transceiver.receiver.track()
+                        if (tr is AudioTrack) {
+                            tr.setEnabled(true)
+                            forceSpeakerRoute()
+                            gotAudioTrack = true
+                            _stats.update { it.copy(transport = "webrtc", connected = true, playing = true, lastError = null) }
+                        }
                     }
+                },
+            ) ?: return false
+            peer = created
+            pc = created
+            val transInit = RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
+            created.addTransceiver(org.webrtc.MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO, transInit)
+            val offer = createOffer(created)
+            setLocal(created, offer)
+            // LAN: espera breve para coletar candidates host no SDP.
+            kotlinx.coroutines.delay(500)
+            val localSdp = created.localDescription?.description ?: offer.description
+            val ans = repository.createWebRtcAnswer(apiBase, token, localSdp)
+            if (ans.sdp.isBlank()) {
+                try {
+                    created.close()
+                } catch (_: Exception) {
                 }
-            },
-        ) ?: return false
-        pc = peer
-        val transInit = RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY)
-        peer.addTransceiver(org.webrtc.MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO, transInit)
-        val offer = createOffer(peer)
-        setLocal(peer, offer)
-        // LAN: espera breve para coletar candidates host no SDP.
-        kotlinx.coroutines.delay(500)
-        val localSdp = peer.localDescription?.description ?: offer.description
-        val ans = repository.createWebRtcAnswer(apiBase, token, localSdp)
-        if (ans.sdp.isBlank()) {
-            peer.close()
-            pc = null
-            return false
-        }
-        setRemote(peer, SessionDescription(SessionDescription.Type.ANSWER, ans.sdp))
-        forceSpeakerRoute()
-        _stats.value = RetornoStats(transport = "webrtc", connected = true, playing = true, queuedFrames = 0)
-        // Se não houver track em breve, deixa fallback atuar.
-        kotlinx.coroutines.delay(1200)
-        if (!gotAudioTrack) {
+                pc = null
+                return false
+            }
+            setRemote(created, SessionDescription(SessionDescription.Type.ANSWER, ans.sdp))
+            forceSpeakerRoute()
+            _stats.update {
+                it.copy(transport = "webrtc", connected = true, playing = gotAudioTrack, queuedFrames = 0)
+            }
+            // Se não houver track em breve, deixa fallback UDP/WebSocket atuar.
+            kotlinx.coroutines.delay(1200)
+            if (!gotAudioTrack) {
+                try {
+                    created.close()
+                } catch (_: Exception) {
+                }
+                pc = null
+                restoreAudioRoute()
+                _stats.update { it.copy(connected = false, playing = false, lastError = "webrtc sem track de audio") }
+                false
+            } else {
+                true
+            }
+        } catch (e: Exception) {
             try {
-                peer.close()
-            } catch (_: Exception) {}
+                peer?.close()
+            } catch (_: Exception) {
+            }
             pc = null
             restoreAudioRoute()
-            _stats.update { it.copy(connected = false, playing = false, lastError = "webrtc sem track de audio") }
-            return false
+            _stats.update {
+                RetornoStats(
+                    transport = "webrtc",
+                    connected = false,
+                    playing = false,
+                    lastError = e.message,
+                )
+            }
+            false
         }
-        return true
     }
 
     private fun tryUdp(host: String, token: String, latency: String): Boolean {

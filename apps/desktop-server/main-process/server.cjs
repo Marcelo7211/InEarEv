@@ -1468,10 +1468,67 @@ function createServices(app) {
   const udpTargets = new Map()
   /** @type {Map<string, Set<import('ws').WebSocket>>} retorno no telemóvel (Expo Go) sem UDP nativo */
   const wsAudioByMusician = new Map()
-  /** @type {Map<string, { id: string, pc: any, source: any, track: any }>} */
+  /** node-webrtc: RTCAudioSource.onData exige ~10 ms de PCM por chamada (ver docs/nonstandard-apis). */
+  const WEBRTC_PCM_FRAMES_PER_PUSH = Math.max(1, Math.round(MVP_SAMPLE_RATE_HZ / 100))
+  const WEBRTC_PCM_SAMPLES_STEREO = WEBRTC_PCM_FRAMES_PER_PUSH * 2
+
+  /**
+   * @type {Map<string, { id: string, pc: any, source: any, track: any, pcmPending?: Int16Array, pcmPendingUsed?: number }>}
+   */
   const webrtcSessions = new Map()
   /** @type {Map<string, Set<string>>} */
   const webrtcSessionsByMusician = new Map()
+
+  /**
+   * Acumula PCM estéreo intercalado e envia ao RTCAudioSource em blocos de 10 ms (requisito da lib wrtc).
+   * @returns {boolean} false se onData falhar (sessão deve ser descartada)
+   */
+  function feedWebRtcSessionAudio(sess, interleavedBlock) {
+    if (!sess || !sess.source) return true
+    if (!(interleavedBlock instanceof Int16Array) || interleavedBlock.length === 0) return true
+    if (!sess.pcmPending) {
+      sess.pcmPending = new Int16Array(8192)
+      sess.pcmPendingUsed = 0
+    }
+    let buf = sess.pcmPending
+    let used = sess.pcmPendingUsed || 0
+    const need = used + interleavedBlock.length
+    if (need > buf.length) {
+      let nl = buf.length
+      while (nl < need) nl *= 2
+      const nb = new Int16Array(nl)
+      nb.set(buf.subarray(0, used))
+      buf = nb
+      sess.pcmPending = buf
+    }
+    buf.set(interleavedBlock, used)
+    used += interleavedBlock.length
+    sess.pcmPendingUsed = used
+    while (sess.pcmPendingUsed >= WEBRTC_PCM_SAMPLES_STEREO) {
+      const u = sess.pcmPendingUsed
+      const chunk = new Int16Array(
+        sess.pcmPending.subarray(0, WEBRTC_PCM_SAMPLES_STEREO),
+      )
+      try {
+        sess.source.onData({
+          samples: chunk,
+          sampleRate: MVP_SAMPLE_RATE_HZ,
+          bitsPerSample: 16,
+          channelCount: 2,
+          numberOfFrames: WEBRTC_PCM_FRAMES_PER_PUSH,
+        })
+      } catch (e) {
+        console.warn(
+          '[inear] WebRTC onData:',
+          e && e.message ? String(e.message) : String(e),
+        )
+        return false
+      }
+      sess.pcmPending.copyWithin(0, WEBRTC_PCM_SAMPLES_STEREO, u)
+      sess.pcmPendingUsed = u - WEBRTC_PCM_SAMPLES_STEREO
+    }
+    return true
+  }
   const muteRampByMusician = new Map()
   let audioSeq = 0
   let sampleClock = 0
@@ -3345,15 +3402,7 @@ function createServices(app) {
         for (const sid of rtcSet) {
           const sess = webrtcSessions.get(sid)
           if (!sess || !sess.source) continue
-          try {
-            sess.source.onData({
-              samples: interleaved,
-              sampleRate: MVP_SAMPLE_RATE_HZ,
-              bitsPerSample: 16,
-              channelCount: 2,
-              numberOfFrames: block,
-            })
-          } catch {
+          if (!feedWebRtcSessionAudio(sess, interleaved)) {
             disposeWebRtcSession(sid)
           }
         }
