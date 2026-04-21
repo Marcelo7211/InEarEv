@@ -2,10 +2,17 @@ const path = require('path')
 const fs = require('fs')
 const http = require('http')
 const dgram = require('dgram')
+const os = require('os')
 const crypto = require('crypto')
 const { spawn, spawnSync, execFileSync, execFile } = require('child_process')
 const util = require('util')
 const execFileP = util.promisify(execFile)
+let wrtc = null
+try {
+  wrtc = require('wrtc')
+} catch {
+  /* WebRTC opcional (android nativo). */
+}
 
 function loadProtocol() {
   return require('@inear/protocol')
@@ -37,6 +44,10 @@ const HTTP_PORT = 3847
 const UDP_AUDIO_PORT = 9876
 const UDP_CONTROL_PORT = 9877
 
+/** Desenvolvimento / primeira execução: utilizador `admin` com senha `admin123` (bcrypt cost 10). */
+const DEFAULT_DEV_ADMIN_BCRYPT =
+  '$2a$10$zkUmrcTtnuJ1ZkZSEegAFeq2eyA9ARmDcpLOiHszZ8hgD7KusfEoy'
+
 /**
  * Binários empacotados pelo electron-builder (extraResources → resources/ffmpeg-win/).
  * Em dev, usa apps/desktop-server/resources/ffmpeg-win/.
@@ -52,8 +63,16 @@ function getBundledWinFfmpegDir() {
   } catch {
     /* */
   }
+  /* main-process/ → resources (dev e fonte empacotada). */
   candidates.push(path.join(__dirname, '..', 'resources', 'ffmpeg-win'))
+  /* npm run dev com cwd = apps/desktop-server */
+  try {
+    candidates.push(path.join(process.cwd(), 'resources', 'ffmpeg-win'))
+  } catch {
+    /* */
+  }
   for (const d of candidates) {
+    if (!d) continue
     const p = path.join(d, 'ffmpeg.exe')
     if (fs.existsSync(p)) return d
   }
@@ -920,6 +939,15 @@ function parseAvfAudioDevices(stderr) {
   return devices
 }
 
+/** @param {string} s */
+function looksLikeFfmpegDshowDeviceLog(s) {
+  const t = String(s || '')
+  return (
+    /DirectShow|dshow\s+audio|directshow\s+audio|\[dshow[^\]]*\]/i.test(t) ||
+    /\bin#\d+\s*@[^\]]*\]\s*"[^"]+"\s*\(\s*audio\s*\)/i.test(t)
+  )
+}
+
 /**
  * Saída de ffmpeg no Windows pode vir em UTF-8, UTF-16 ou página de código; isto evita lista vazia por parsing falhado.
  * @param {Buffer | string | undefined | null} stderrBuf
@@ -935,7 +963,9 @@ function decodeFfmpegDeviceListBuffers(stderrBuf, stdoutBuf) {
       return b.slice(2).toString('utf16le')
     }
     const utf8 = b.toString('utf8')
-    if (/DirectShow|dshow|ffmpeg version|libav/i.test(utf8)) return utf8
+    if (looksLikeFfmpegDshowDeviceLog(utf8) || /ffmpeg version|libav/i.test(utf8)) return utf8
+    const latin1 = b.toString('latin1')
+    if (looksLikeFfmpegDshowDeviceLog(latin1)) return latin1
     let utf16Score = 0
     const sampleLen = Math.min(200, b.length)
     for (let i = 1; i < sampleLen; i += 2) {
@@ -943,7 +973,7 @@ function decodeFfmpegDeviceListBuffers(stderrBuf, stdoutBuf) {
     }
     if (utf16Score > 12 && b.length > 64) {
       const u16 = b.toString('utf16le')
-      if (/DirectShow|dshow/i.test(u16)) return u16
+      if (/DirectShow|dshow|in#\d+\s*@/i.test(u16)) return u16
     }
     return utf8
   }
@@ -977,17 +1007,43 @@ function parseDshowAudioDevices(text) {
     .replace(/\u2018|\u2019/g, "'")
     .replace(/\u00A0/g, ' ')
   const lower = raw.toLowerCase()
-  const marker = 'directshow audio devices'
-  const idx = lower.indexOf(marker)
-  if (idx === -1) return []
+  let idx = lower.indexOf('directshow audio devices')
+  let markerLen = 'directshow audio devices'.length
+  if (idx === -1) {
+    idx = lower.indexOf('dshow audio devices')
+    if (idx !== -1) markerLen = 'dshow audio devices'.length
+  }
+  if (idx === -1) {
+    const m = raw.match(/direct\s*show\s+audio\s+devices/i)
+    if (m && m.index != null) {
+      idx = m.index
+      markerLen = m[0].length
+    }
+  }
+  if (idx === -1) {
+    const fallback = []
+    for (const m of raw.matchAll(/\[[^\]]*in#\d+\s*@[^\]]*\]\s*"([^"]+)"\s*\(\s*audio\s*\)/gi)) {
+      fallback.push(m[1])
+    }
+    if (fallback.length > 0) return uniqueDshowDeviceNames(fallback)
+    return []
+  }
 
-  const from = idx + marker.length
+  const from = idx + markerLen
   let chunk = raw.slice(from, from + 120000)
   const stopM = chunk.match(/\n(?:Input #|Press \[q\]|files:|file:)/i)
   if (stopM && stopM.index != null) chunk = chunk.slice(0, stopM.index)
 
   const names = []
+  /* Builds recentes: `[dshow @ …] "Dispositivo"` — clássico. */
   for (const m of chunk.matchAll(/\[dshow[^\]]*\]\s*"([^"]+)"/gi)) {
+    names.push(m[1])
+  }
+  /**
+   * FFmpeg mais novo (ex. listagem DirectShow): `[in#0 @ …] "Microfone (…)" (audio)`
+   * em vez do prefixo `[dshow @ …]`.
+   */
+  for (const m of chunk.matchAll(/\[[^\]]*in#\d+\s*@[^\]]*\]\s*"([^"]+)"\s*\(\s*audio\s*\)/gi)) {
     names.push(m[1])
   }
   if (names.length === 0) {
@@ -998,6 +1054,10 @@ function parseDshowAudioDevices(text) {
       else {
         const m2 = line.match(/\[dshow[^\]]*\]\s*'([^']+)'/i)
         if (m2) names.push(m2[1])
+        else {
+          const m3 = line.match(/\[[^\]]*in#\d+\s*@[^\]]*\]\s*"([^"]+)"\s*\(\s*audio\s*\)/i)
+          if (m3) names.push(m3[1])
+        }
       }
     }
   }
@@ -1011,6 +1071,60 @@ function parseDshowAudioDevices(text) {
     }
   }
   return uniqueDshowDeviceNames(names)
+}
+
+/**
+ * Saída de `ffmpeg -devices` (ver se o binário expõe indev dshow).
+ * @param {string} ffmpeg
+ * @returns {{ tail: string, exitCode: number | null, hasDshow: boolean }}
+ */
+function ffmpegDevicesSupportDiagSync(ffmpeg) {
+  const ffDir = path.dirname(ffmpeg)
+  const r = spawnSync(ffmpeg, ['-hide_banner', '-devices'], {
+    encoding: 'buffer',
+    maxBuffer: 4 * 1024 * 1024,
+    timeout: 8000,
+    windowsHide: true,
+    cwd: ffDir,
+    env: augmentPathForFfmpeg(process.env),
+  })
+  const combined = decodeFfmpegDeviceListBuffers(r.stderr, r.stdout)
+  const s = String(combined).replace(/\r\n/g, '\n')
+  const hasDshow = /\bdshow\b/i.test(s)
+  const tail = s.length > 3500 ? s.slice(-3500) : s
+  return {
+    tail,
+    exitCode: typeof r.status === 'number' ? r.status : null,
+    hasDshow,
+  }
+}
+
+/**
+ * Últimas linhas de `ffmpeg -list_options -f dshow -i audio=…` (pins / formatos).
+ * @param {string} ffmpeg
+ * @param {string} deviceName
+ * @returns {string | null}
+ */
+function dshowListOptionsTailSync(ffmpeg, deviceName) {
+  const name = String(deviceName || '').trim()
+  if (!name) return null
+  const ffDir = path.dirname(ffmpeg)
+  const r = spawnSync(
+    ffmpeg,
+    ['-hide_banner', '-list_options', 'true', '-f', 'dshow', '-i', dshowAudioInputSpecifier(name)],
+    {
+      encoding: 'buffer',
+      maxBuffer: 4 * 1024 * 1024,
+      timeout: 12000,
+      windowsHide: true,
+      cwd: ffDir,
+      env: augmentPathForFfmpeg(process.env),
+    },
+  )
+  const combined = decodeFfmpegDeviceListBuffers(r.stderr, r.stdout)
+  const t = String(combined).replace(/\r\n/g, '\n').trim()
+  if (!t) return null
+  return t.length > 2500 ? t.slice(-2500) : t
 }
 
 /**
@@ -1069,6 +1183,76 @@ function statePath(userData) {
   return path.join(userData, 'inear-state.json')
 }
 
+function userNameKey(u) {
+  return String((u && u.username) || '')
+    .trim()
+    .toLowerCase()
+}
+
+/**
+ * Garante um administrador por defeito quando o estado não tem nenhum (ex.: ficheiros antigos com `users: []`).
+ * @param {*} raw estado carregado de `inear-state.json`
+ * @returns {boolean} true se o estado foi alterado e deve ser gravado
+ */
+function ensureDefaultAdminUser(raw) {
+  if (!Array.isArray(raw.users)) raw.users = []
+  if (raw.users.some((u) => u && u.role === 'admin')) return false
+  if (raw.users.some((u) => u && userNameKey(u) === 'admin')) return false
+  raw.users.push({
+    username: 'admin',
+    passwordHash: DEFAULT_DEV_ADMIN_BCRYPT,
+    role: 'admin',
+  })
+  return true
+}
+
+/**
+ * Se já existe admin com outro nome (wizard), acrescenta a conta documentada `admin` / `admin123`.
+ * @param {*} raw
+ * @returns {boolean}
+ */
+function ensureBuiltinAdminLoginExists(raw) {
+  if (!Array.isArray(raw.users)) raw.users = []
+  if (raw.users.some((u) => u && userNameKey(u) === 'admin')) return false
+  raw.users.push({
+    username: 'admin',
+    passwordHash: DEFAULT_DEV_ADMIN_BCRYPT,
+    role: 'admin',
+  })
+  return true
+}
+
+/**
+ * Garante que o utilizador `admin` (qualquer capitalização) tem sempre a senha `admin123`.
+ * @param {*} raw
+ * @returns {boolean}
+ */
+function normalizeBuiltinAdminPassword(raw) {
+  const bcrypt = require('bcryptjs')
+  if (!Array.isArray(raw.users)) raw.users = []
+  const u = raw.users.find((x) => x && x.role === 'admin' && userNameKey(x) === 'admin')
+  if (!u) return false
+  let changed = false
+  if (u.username !== 'admin') {
+    u.username = 'admin'
+    changed = true
+  }
+  let ok = false
+  try {
+    ok =
+      typeof u.passwordHash === 'string' &&
+      u.passwordHash.length >= 20 &&
+      bcrypt.compareSync('admin123', u.passwordHash)
+  } catch {
+    ok = false
+  }
+  if (!ok) {
+    u.passwordHash = DEFAULT_DEV_ADMIN_BCRYPT
+    changed = true
+  }
+  return changed
+}
+
 function defaultState() {
   const showfile = migrateShowfile(defaultShowfile())
   // Primeira execução: instalação "limpa". Admin será criado no wizard inicial.
@@ -1077,7 +1261,13 @@ function defaultState() {
     showfile,
     jwtSecret: crypto.randomBytes(32).toString('hex'),
     pairing: null,
-    users: [],
+    users: [
+      {
+        username: 'admin',
+        passwordHash: DEFAULT_DEV_ADMIN_BCRYPT,
+        role: 'admin',
+      },
+    ],
     /** macOS: índice AVFoundation só-áudio (`none:N` no ffmpeg); usado só em modo `manual`. */
     captureAvfoundationAudioIndex: null,
     /**
@@ -1099,7 +1289,7 @@ function defaultState() {
      */
     captureChannelCountAuto: true,
     /** Bloco PCM por tick do motor de áudio (64/128/256/512 amostras @ 48 kHz). */
-    audioBlockSamples: 128,
+    audioBlockSamples: 64,
   }
 }
 
@@ -1146,6 +1336,7 @@ function expandMusicianScopeForInterfaceStrips(sf) {
   return changed
 }
 
+/** @param {string} userData */
 function loadOrCreateState(userData) {
   const p = statePath(userData)
   if (fs.existsSync(p)) {
@@ -1201,11 +1392,15 @@ function loadOrCreateState(userData) {
         raw.captureChannelCountAuto = Boolean(raw.captureChannelCountAuto)
       }
       if (raw.audioBlockSamples === undefined || raw.audioBlockSamples === null) {
-        raw.audioBlockSamples = 128
+        raw.audioBlockSamples = 64
       } else {
         raw.audioBlockSamples = clampAudioBlockSamples(raw.audioBlockSamples)
       }
-      if (expandMusicianScopeForInterfaceStrips(raw.showfile)) {
+      let dirty = expandMusicianScopeForInterfaceStrips(raw.showfile)
+      if (ensureDefaultAdminUser(raw)) dirty = true
+      if (ensureBuiltinAdminLoginExists(raw)) dirty = true
+      if (normalizeBuiltinAdminPassword(raw)) dirty = true
+      if (dirty) {
         fs.writeFileSync(p, JSON.stringify(raw, null, 2), 'utf8')
       }
       return raw
@@ -1262,6 +1457,9 @@ function createServices(app) {
     exitCode: /** @type {number | null} */ (null),
     tail: '',
     combinedLen: 0,
+    ffmpegDevicesExitCode: /** @type {number | null} */ (null),
+    ffmpegDevicesTail: '',
+    ffmpegHasDshowInDevices: /** @type {boolean | null} */ (null),
     at: 0,
   }
   /** @type {Map<string, { lastReportSeqGaps: number | null, samples: Array<{ t: number, rtt: number, gapsDelta: number }> }>} */
@@ -1270,6 +1468,10 @@ function createServices(app) {
   const udpTargets = new Map()
   /** @type {Map<string, Set<import('ws').WebSocket>>} retorno no telemóvel (Expo Go) sem UDP nativo */
   const wsAudioByMusician = new Map()
+  /** @type {Map<string, { id: string, pc: any, source: any, track: any }>} */
+  const webrtcSessions = new Map()
+  /** @type {Map<string, Set<string>>} */
+  const webrtcSessionsByMusician = new Map()
   const muteRampByMusician = new Map()
   let audioSeq = 0
   let sampleClock = 0
@@ -1395,12 +1597,18 @@ function createServices(app) {
         exitCode: null,
         tail: '',
         combinedLen: 0,
+        ffmpegDevicesExitCode: null,
+        ffmpegDevicesTail: '',
+        ffmpegHasDshowInDevices: null,
         at: Date.now(),
       }
       return []
     }
     const ffDir = path.dirname(ffmpeg)
     const attempts = [
+      ['-hide_banner', '-list_devices', 'true', '-f', 'dshow', '-i', 'dummy'],
+      ['-list_devices', 'true', '-f', 'dshow', '-i', 'dummy'],
+      ['-hide_banner', '-list_devices', 'true', '-f', 'dshow', '-i', ''],
       ['-hide_banner', '-f', 'dshow', '-list_devices', 'true', '-i', 'dummy'],
       ['-loglevel', 'info', '-f', 'dshow', '-list_devices', 'true', '-i', 'dummy'],
       ['-hide_banner', '-f', 'dshow', '-list_devices', 'true', '-i', 'audio=dummy'],
@@ -1424,13 +1632,17 @@ function createServices(app) {
       if (best.length > 0) break
     }
     const s = String(lastCombined)
-    lastWinDshowListDiag = {
-      exitCode: lastStatus,
-      tail: s.slice(-4000),
-      combinedLen: s.length,
-      at: Date.now(),
+    let devDiag = {
+      exitCode: /** @type {number | null} */ (null),
+      tail: '',
+      hasDshow: false,
     }
     if (best.length === 0) {
+      try {
+        devDiag = ffmpegDevicesSupportDiagSync(ffmpeg)
+      } catch {
+        /* */
+      }
       console.warn(
         '[inear] DirectShow: lista de áudio vazia após',
         attempts.length,
@@ -1438,7 +1650,18 @@ function createServices(app) {
         lastStatus,
         'len=',
         s.length,
+        'ffmpeg -devices dshow=',
+        devDiag.hasDshow,
       )
+    }
+    lastWinDshowListDiag = {
+      exitCode: lastStatus,
+      tail: s.slice(-4000),
+      combinedLen: s.length,
+      ffmpegDevicesExitCode: devDiag.exitCode,
+      ffmpegDevicesTail: devDiag.tail,
+      ffmpegHasDshowInDevices: best.length === 0 ? devDiag.hasDshow : null,
+      at: Date.now(),
     }
     return best
   }
@@ -1885,7 +2108,13 @@ function createServices(app) {
   }
 
   function findUserByUsername(username) {
-    return state.users.find((u) => u.username === username)
+    const key = String(username || '')
+      .trim()
+      .toLowerCase()
+    if (!key) return undefined
+    return state.users.find(
+      (u) => u && String(u.username || '').trim().toLowerCase() === key,
+    )
   }
 
   function hasAdminUser() {
@@ -1921,6 +2150,18 @@ function createServices(app) {
   ex.use(express.json({ limit: '2mb' }))
   ex.get('/api/health', (_req, res) => {
     res.json({ ok: true, uptime: process.uptime() })
+  })
+  ex.get('/api/server-addresses', (_req, res) => {
+    const out = []
+    const ifs = os.networkInterfaces() || {}
+    for (const [name, rows] of Object.entries(ifs)) {
+      for (const row of rows || []) {
+        if (!row || row.internal) continue
+        if (row.family !== 'IPv4') continue
+        out.push({ iface: name, ip: row.address })
+      }
+    }
+    res.json({ httpPort: HTTP_PORT, addresses: out })
   })
   ex.get('/api/setup/status', (_req, res) => {
     res.json({ required: !hasAdminUser() })
@@ -2050,22 +2291,38 @@ function createServices(app) {
       const rawProbe = q.probe
       const probeStr = Array.isArray(rawProbe) ? rawProbe[0] : rawProbe
       const probeAll = probeStr === 'all' || probeStr === '1'
+      const rawDshowOpts = q.dshowOptions
+      const dshowOptsStr = Array.isArray(rawDshowOpts) ? rawDshowOpts[0] : rawDshowOpts
+      const dshowListOptionsRequested =
+        process.platform === 'win32' &&
+        probeAll &&
+        (dshowOptsStr === '1' || dshowOptsStr === 'true')
       const ffmpegFound = Boolean(findFfmpegExecutable())
       const ffprobeFound = Boolean(findFfprobeExecutable())
       const usingBundledWinFfmpeg = process.platform === 'win32' && Boolean(getBundledWinFfmpegDir())
-      /** @type {{ index: number, name: string, inputChannels: number | null, probeError: string | null }[]} */
+      /** @type {{ index: number, name: string, inputChannels: number | null, probeError: string | null, dshowOptionsTail?: string | null }[]} */
       let devicesWithInputs
+      const ffmpegForOpts = findFfmpegExecutable()
       if (probeAll) {
         devicesWithInputs = await Promise.all(
           devices.map(async (d) => {
             const pr = await probeCaptureRowResultAsync(d, {
               force: refreshProbe,
             })
+            let dshowOptionsTail = null
+            if (dshowListOptionsRequested && ffmpegForOpts) {
+              try {
+                dshowOptionsTail = dshowListOptionsTailSync(ffmpegForOpts, d.name)
+              } catch {
+                dshowOptionsTail = null
+              }
+            }
             return {
               index: d.index,
               name: d.name,
               inputChannels: pr.channels,
               probeError: pr.error,
+              ...(dshowListOptionsRequested ? { dshowOptionsTail: dshowOptionsTail ?? null } : {}),
             }
           }),
         )
@@ -2130,6 +2387,9 @@ function createServices(app) {
                 exitCode: lastWinDshowListDiag.exitCode,
                 combinedLen: lastWinDshowListDiag.combinedLen,
                 outputTail: lastWinDshowListDiag.tail,
+                ffmpegDevicesExitCode: lastWinDshowListDiag.ffmpegDevicesExitCode,
+                ffmpegDevicesTail: lastWinDshowListDiag.ffmpegDevicesTail,
+                ffmpegHasDshowInDevices: lastWinDshowListDiag.ffmpegHasDshowInDevices,
               },
             }
           : {}),
@@ -2290,26 +2550,91 @@ function createServices(app) {
     })
   })
   ex.post('/api/auth/login', loginLimiter, (req, res) => {
-    const { username, password } = req.body || {}
-    const u = state.users.find((x) => x.username === username)
-    if (!u || !bcrypt.compareSync(String(password || ''), u.passwordHash)) {
+    const username = String((req.body || {}).username || '').trim()
+    const password = String((req.body || {}).password || '')
+    const u = findUserByUsername(username)
+    let passOk = false
+    try {
+      passOk =
+        Boolean(u) &&
+        typeof u.passwordHash === 'string' &&
+        bcrypt.compareSync(String(password || ''), u.passwordHash)
+    } catch {
+      passOk = false
+    }
+    if (!passOk) {
       return res.status(401).json({ error: 'invalid_credentials' })
     }
     const token = signToken({ sub: u.username, role: u.role })
     res.json({ token, role: u.role })
   })
   ex.post('/api/auth/pair-login', loginLimiter, (req, res) => {
-    const { code, username } = req.body || {}
+    const body = req.body || {}
+    const code = body.code
+    const username = String(body.username || '').trim()
     const p = state.pairing
     if (!p || Date.now() > p.expiresAt || String(code) !== p.code) {
       return res.status(401).json({ error: 'invalid_pairing_code' })
     }
-    const u = state.users.find((x) => x.username === username)
+    const u = findUserByUsername(username)
     if (!u || u.role !== 'musician') {
       return res.status(401).json({ error: 'invalid_musician' })
     }
     const token = signToken({ sub: u.username, role: 'musician' })
     res.json({ token, role: 'musician' })
+  })
+  ex.post('/api/webrtc/offer', authMiddleware, async (req, res) => {
+    if (!wrtc) {
+      return res.status(501).json({ error: 'webrtc_unavailable', message: 'wrtc não instalado.' })
+    }
+    if (req.user.role !== 'musician') {
+      return res.status(403).json({ error: 'forbidden' })
+    }
+    const strip = findMusicianByUsername(req.user.sub)
+    if (!strip) {
+      return res.status(404).json({ error: 'musician_not_found' })
+    }
+    const body = req.body || {}
+    const sdp = typeof body.sdp === 'string' ? body.sdp : ''
+    if (!sdp) {
+      return res.status(400).json({ error: 'invalid_offer' })
+    }
+    const sessionId = `rtc_${crypto.randomBytes(6).toString('hex')}`
+    try {
+      const pc = new wrtc.RTCPeerConnection({ iceServers: [] })
+      const source = new wrtc.nonstandard.RTCAudioSource()
+      const track = source.createTrack()
+      pc.addTrack(track)
+      pc.onconnectionstatechange = () => {
+        const st = String(pc.connectionState || '')
+        if (st === 'closed' || st === 'failed' || st === 'disconnected') {
+          disposeWebRtcSession(sessionId)
+        }
+      }
+      await pc.setRemoteDescription(new wrtc.RTCSessionDescription({ type: 'offer', sdp }))
+      const answer = await pc.createAnswer()
+      await pc.setLocalDescription(answer)
+      await waitIceGatheringComplete(pc)
+      webrtcSessions.set(sessionId, { id: strip.id, pc, source, track })
+      let bucket = webrtcSessionsByMusician.get(strip.id)
+      if (!bucket) {
+        bucket = new Set()
+        webrtcSessionsByMusician.set(strip.id, bucket)
+      }
+      bucket.add(sessionId)
+      return res.json({
+        ok: true,
+        sessionId,
+        type: 'answer',
+        sdp: pc.localDescription ? pc.localDescription.sdp : answer.sdp,
+      })
+    } catch (e) {
+      disposeWebRtcSession(sessionId)
+      return res.status(500).json({
+        error: 'webrtc_offer_failed',
+        message: e && e.message ? String(e.message) : String(e),
+      })
+    }
   })
   ex.post('/api/admin/musicians', authMiddleware, (req, res) => {
     if (req.user.role !== 'admin') {
@@ -2427,15 +2752,20 @@ function createServices(app) {
     bustPcCaptureCaches()
     const devices = listPcAudioCaptureDevicesCached()
     const meta = computePcCaptureMeta(devices)
+    const hasNativeDeviceList =
+      (process.platform === 'darwin' || process.platform === 'win32') &&
+      Array.isArray(devices) &&
+      devices.length > 0
     const captureOk =
       envOn ||
       meta.captureSource === 'avfoundation' ||
-      meta.captureSource === 'dshow'
+      meta.captureSource === 'dshow' ||
+      hasNativeDeviceList
     if (!captureOk) {
       return res.status(400).json({
         error: 'capture_required',
         message:
-          'Ativa primeiro a captura (entrada de áudio no painel ou INEAR_CAPTURE_CMD) para sincronizar os canais da interface.',
+          'É necessário ffmpeg a listar pelo menos uma entrada (Windows/macOS), ou define INEAR_CAPTURE_CMD, para sincronizar as faixas da interface.',
       })
     }
     const body = req.body || {}
@@ -2467,10 +2797,8 @@ function createServices(app) {
     for (let k = 0; k < n; k++) {
       const prev = prevByIndex.get(k)
       const defName = `Entrada ${k + 1} · ${baseName}`
-      const name =
-        prev && typeof prev.name === 'string' && prev.name.trim()
-          ? prev.name.trim()
-          : defName
+      /* Ao sincronizar interface, refletir imediatamente a fonte atual nos nomes. */
+      const name = defName
       const strip = {
         id: `if_${k}`,
         name,
@@ -2729,13 +3057,68 @@ function createServices(app) {
   function activeMusicianIdsForAudio() {
     const s = new Set(udpTargets.keys())
     for (const id of wsAudioByMusician.keys()) s.add(id)
+    for (const id of webrtcSessionsByMusician.keys()) s.add(id)
     return s
+  }
+  function disposeWebRtcSession(sessionId) {
+    const sess = webrtcSessions.get(sessionId)
+    if (!sess) return
+    webrtcSessions.delete(sessionId)
+    const byM = webrtcSessionsByMusician.get(sess.id)
+    if (byM) {
+      byM.delete(sessionId)
+      if (byM.size === 0) webrtcSessionsByMusician.delete(sess.id)
+    }
+    try {
+      if (sess.track) sess.track.stop()
+    } catch {
+      /* */
+    }
+    try {
+      if (sess.pc) sess.pc.close()
+    } catch {
+      /* */
+    }
+  }
+  async function waitIceGatheringComplete(pc, timeoutMs = 1200) {
+    if (!pc || pc.iceGatheringState === 'complete') return
+    await new Promise((resolve) => {
+      let done = false
+      const onState = () => {
+        if (pc.iceGatheringState === 'complete' && !done) {
+          done = true
+          cleanup()
+          resolve()
+        }
+      }
+      const timer = setTimeout(() => {
+        if (!done) {
+          done = true
+          cleanup()
+          resolve()
+        }
+      }, timeoutMs)
+      const cleanup = () => {
+        clearTimeout(timer)
+        try {
+          pc.removeEventListener('icegatheringstatechange', onState)
+        } catch {
+          /* */
+        }
+      }
+      try {
+        pc.addEventListener('icegatheringstatechange', onState)
+      } catch {
+        clearTimeout(timer)
+        resolve()
+      }
+    })
   }
   function normalizeLatencyProfile(input) {
     return input === 'low' ? 'low' : 'stable'
   }
   function wsBufferedFactorForProfile(profile) {
-    return profile === 'low' ? 6 : 12
+    return profile === 'low' ? 3 : 10
   }
 
   httpServer.on('upgrade', (request, socket, head) => {
@@ -2957,6 +3340,24 @@ function createServices(app) {
           }
         }
       }
+      const rtcSet = webrtcSessionsByMusician.get(musicianId)
+      if (rtcSet && rtcSet.size > 0) {
+        for (const sid of rtcSet) {
+          const sess = webrtcSessions.get(sid)
+          if (!sess || !sess.source) continue
+          try {
+            sess.source.onData({
+              samples: interleaved,
+              sampleRate: MVP_SAMPLE_RATE_HZ,
+              bitsPerSample: 16,
+              channelCount: 2,
+              numberOfFrames: block,
+            })
+          } catch {
+            disposeWebRtcSession(sid)
+          }
+        }
+      }
     }
     nextAudioTickAt += delay
     const now = Date.now()
@@ -2978,6 +3379,9 @@ function createServices(app) {
       /* ignore */
     }
     wsAudioByMusician.clear()
+    for (const sid of Array.from(webrtcSessions.keys())) {
+      disposeWebRtcSession(sid)
+    }
     httpServer.close()
     audioSock.close()
     controlSock.close()

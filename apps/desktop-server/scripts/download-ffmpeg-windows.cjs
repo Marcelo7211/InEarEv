@@ -63,6 +63,60 @@ function findFileRecursive(root, baseName) {
   return null
 }
 
+/**
+ * Extrai ZIP para destDir (Windows: tar nativo ou PowerShell; outros: unzip ou tar).
+ * @param {string} zipPath
+ * @param {string} destDir
+ */
+function extractZipArchive(zipPath, destDir) {
+  fs.mkdirSync(destDir, { recursive: true })
+  const tryTar = () => {
+    const r = spawnSync('tar', ['-xf', zipPath, '-C', destDir], {
+      encoding: 'utf8',
+      windowsHide: true,
+    })
+    return r.status === 0
+  }
+  const tryUnzip = () => {
+    const r = spawnSync('unzip', ['-q', '-o', zipPath, '-d', destDir], {
+      encoding: 'utf8',
+      windowsHide: true,
+    })
+    return r.status === 0
+  }
+  const tryPowerShellExpand = () => {
+    const r = spawnSync(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        'Expand-Archive -LiteralPath $env:INEAR_ZIP -DestinationPath $env:INEAR_DEST -Force',
+      ],
+      {
+        encoding: 'utf8',
+        windowsHide: true,
+        env: { ...process.env, INEAR_ZIP: zipPath, INEAR_DEST: destDir },
+      },
+    )
+    return r.status === 0
+  }
+
+  if (process.platform === 'win32') {
+    if (tryTar()) return
+    if (tryPowerShellExpand()) return
+    if (tryUnzip()) return
+  } else {
+    if (tryUnzip()) return
+    if (tryTar()) return
+  }
+  throw new Error(
+    'Não foi possível extrair o ZIP (tentativas: tar, unzip' +
+      (process.platform === 'win32' ? ', PowerShell Expand-Archive' : '') +
+      '). No Windows confirma que `tar` ou PowerShell estão disponíveis.',
+  )
+}
+
 async function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true })
   const destFf = path.join(OUT_DIR, 'ffmpeg.exe')
@@ -83,14 +137,7 @@ async function main() {
   const buf = await httpsGetBuffer(ZIP_URL)
   fs.writeFileSync(CACHE_ZIP, buf)
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'inear-ff-'))
-  const un = spawnSync('unzip', ['-q', '-o', CACHE_ZIP, '-d', tmp], {
-    encoding: 'utf8',
-  })
-  if (un.status !== 0) {
-    throw new Error(
-      `unzip falhou (${un.status}): ${un.stderr || un.stdout || 'sem saída'} — instala unzip ou extrai manualmente o zip para resources/ffmpeg-win/`,
-    )
-  }
+  extractZipArchive(CACHE_ZIP, tmp)
   const ff = findFileRecursive(tmp, 'ffmpeg.exe')
   const pb = findFileRecursive(tmp, 'ffprobe.exe')
   if (!ff || !pb) {

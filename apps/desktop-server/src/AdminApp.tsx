@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -74,8 +75,7 @@ export function AdminApp() {
   const [setupChecked, setSetupChecked] = useState(false)
   const [loginUser, setLoginUser] = useState('')
   const [loginPass, setLoginPass] = useState('')
-  const [pairLoginCode, setPairLoginCode] = useState('')
-  const [pairLoginUser, setPairLoginUser] = useState('musician1')
+  const [serverIps, setServerIps] = useState<string[]>([])
 
   const authHeaders = useMemo(() => ({ token }), [token])
 
@@ -120,6 +120,27 @@ export function AdminApp() {
     }
   }, [token, refreshShowfile])
 
+  /** Reconciliacao bidirecional: se o musico editar no app, o Admin reflete em poucos segundos. */
+  useEffect(() => {
+    if (!token || role !== 'admin') return
+    let stopped = false
+    const tick = async () => {
+      if (stopped) return
+      try {
+        await refreshShowfile()
+      } catch {
+        /* ignore polling errors */
+      }
+    }
+    const t = setInterval(() => {
+      void tick()
+    }, 1500)
+    return () => {
+      stopped = true
+      clearInterval(t)
+    }
+  }, [token, role, refreshShowfile])
+
   useEffect(() => {
     if (!token || role !== 'admin') return
     let cancelled = false
@@ -156,6 +177,27 @@ export function AdminApp() {
       clearInterval(t)
     }
   }, [token, role])
+
+  useEffect(() => {
+    if (token) return
+    let cancelled = false
+    const loadIps = async () => {
+      try {
+        const r = await api<{ httpPort: number; addresses: { iface: string; ip: string }[] }>(
+          '/api/server-addresses',
+        )
+        if (cancelled) return
+        const ips = Array.from(new Set((r.addresses || []).map((x) => x.ip).filter(Boolean)))
+        setServerIps(ips)
+      } catch {
+        if (!cancelled) setServerIps([])
+      }
+    }
+    void loadIps()
+    return () => {
+      cancelled = true
+    }
+  }, [token])
 
   /** Remove JWT da barra de endereço após consumir (mantém ?api= para refresh). */
   useEffect(() => {
@@ -198,28 +240,6 @@ export function AdminApp() {
           password: loginPass,
         }),
       })
-      setToken(r.token)
-      setRole(r.role)
-      localStorage.setItem('inear_token', r.token)
-      localStorage.setItem('inear_role', r.role)
-    } catch (e) {
-      setError(String((e as Error).message))
-    }
-  }
-
-  async function pairLogin() {
-    setError(null)
-    try {
-      const r = await api<{ token: string; role: Role }>(
-        '/api/auth/pair-login',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            code: pairLoginCode,
-            username: pairLoginUser,
-          }),
-        },
-      )
       setToken(r.token)
       setRole(r.role)
       localStorage.setItem('inear_token', r.token)
@@ -285,20 +305,46 @@ export function AdminApp() {
     localStorage.removeItem('inear_role')
   }
 
+  const preferredServerApiBase = useMemo(() => {
+    if (serverIps.length === 0) return getApiBase()
+    return `http://${serverIps[0]}:3847`
+  }, [serverIps])
+
   if (!token || !role) {
     return (
       <main
         style={{
           padding: 24,
-          maxWidth: 480,
+          maxWidth: 560,
           margin: '0 auto',
           minHeight: '100vh',
           overflowY: 'auto',
           boxSizing: 'border-box',
         }}
       >
-        <h1 style={{ marginTop: 0 }}>inEar — login</h1>
-        <p style={{ color: '#9aa0a6' }}>API: {getApiBase()}</p>
+        <h1 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span role="img" aria-label="fone de ouvido">
+            🎧
+          </span>
+          <span>inEar — login</span>
+        </h1>
+        <div
+          style={{
+            border: '1px solid #2f425b',
+            borderRadius: 16,
+            background: 'linear-gradient(180deg,#182434 0%,#111a26 100%)',
+            boxShadow: '0 10px 26px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.03)',
+            padding: 14,
+            marginBottom: 14,
+          }}
+        >
+          <p style={{ color: '#9aa0a6', margin: 0 }}>
+            API local: <code>{getApiBase()}</code>
+          </p>
+          <p style={{ color: '#81c995', margin: '8px 0 0', fontSize: 13 }}>
+            IP de conexão (RTC): <code>{preferredServerApiBase}</code>
+          </p>
+        </div>
         {setupChecked && setupRequired ? (
           <aside
             style={{
@@ -319,11 +365,19 @@ export function AdminApp() {
           </aside>
         ) : null}
         {error && <p style={{ color: '#f28b82' }}>{error}</p>}
-        <h2>{setupChecked && setupRequired ? 'Criar Admin' : 'Admin / músico (senha)'}</h2>
+        {setupChecked && setupRequired ? <h2 style={{ marginBottom: 10 }}>Criar Admin</h2> : null}
         <label style={{ display: 'block', marginBottom: 8 }}>
           Usuário
           <input
-            style={{ width: '100%', marginTop: 4 }}
+            style={{
+              width: '100%',
+              marginTop: 4,
+              background: '#0f1722',
+              color: '#e8eaed',
+              border: '1px solid #34485f',
+              borderRadius: 8,
+              padding: '8px 10px',
+            }}
             value={loginUser}
             onChange={(e) => setLoginUser(e.target.value)}
           />
@@ -332,42 +386,49 @@ export function AdminApp() {
           Senha
           <input
             type="password"
-            style={{ width: '100%', marginTop: 4 }}
+            style={{
+              width: '100%',
+              marginTop: 4,
+              background: '#0f1722',
+              color: '#e8eaed',
+              border: '1px solid #34485f',
+              borderRadius: 8,
+              padding: '8px 10px',
+            }}
             value={loginPass}
             onChange={(e) => setLoginPass(e.target.value)}
           />
         </label>
         {setupChecked && setupRequired ? (
-          <button type="button" onClick={bootstrapAdmin}>
+          <button
+            type="button"
+            onClick={bootstrapAdmin}
+            style={{
+              padding: '8px 14px',
+              borderRadius: 999,
+              border: '1px solid #335f8a',
+              background: 'linear-gradient(180deg,#234265 0%,#172a42 100%)',
+              color: '#e8eaed',
+              cursor: 'pointer',
+            }}
+          >
             Criar admin e entrar
           </button>
         ) : (
-          <>
-            <button type="button" onClick={login}>
-              Entrar
-            </button>
-            <hr style={{ margin: '24px 0', borderColor: '#333' }} />
-            <h2>Músico — pairing</h2>
-            <label style={{ display: 'block', marginBottom: 8 }}>
-              Código (6 dígitos)
-              <input
-                style={{ width: '100%', marginTop: 4 }}
-                value={pairLoginCode}
-                onChange={(e) => setPairLoginCode(e.target.value)}
-              />
-            </label>
-            <label style={{ display: 'block', marginBottom: 8 }}>
-              Usuário músico
-              <input
-                style={{ width: '100%', marginTop: 4 }}
-                value={pairLoginUser}
-                onChange={(e) => setPairLoginUser(e.target.value)}
-              />
-            </label>
-            <button type="button" onClick={pairLogin}>
-              Entrar com código
-            </button>
-          </>
+          <button
+            type="button"
+            onClick={login}
+            style={{
+              padding: '8px 14px',
+              borderRadius: 999,
+              border: '1px solid #335f8a',
+              background: 'linear-gradient(180deg,#234265 0%,#172a42 100%)',
+              color: '#e8eaed',
+              cursor: 'pointer',
+            }}
+          >
+            Entrar
+          </button>
         )}
       </main>
     )
@@ -883,7 +944,7 @@ export function AdminApp() {
         <section style={ui.panelCard}>
           <h2 style={{ marginTop: 0 }}>Sessão</h2>
           <p>
-            HTTP <code>{getApiBase()}</code> · UDP áudio{' '}
+            HTTP <code>{preferredServerApiBase}</code> · UDP áudio{' '}
             <code>:9876</code> · UDP controle <code>:9877</code>
           </p>
           <p>Showfile: {showfile.name}</p>
@@ -1240,6 +1301,17 @@ type CaptureInputMatrix = {
   gainByIndex?: Record<string, number>
 }
 
+/** Nome DirectShow típico: `Entrada (Driver / interface)`. */
+function splitAudioDeviceEndpointName(name: string): {
+  entrada: string
+  interfaceDriver?: string
+} {
+  const t = String(name || '').trim()
+  const m = t.match(/^(.+?)\s+\(([^)]+)\)\s*$/)
+  if (m) return { entrada: m[1].trim(), interfaceDriver: m[2].trim() }
+  return { entrada: t }
+}
+
 type AudioCaptureDevicesRes = {
   platform: string
   ffmpegFound?: boolean
@@ -1249,12 +1321,16 @@ type AudioCaptureDevicesRes = {
     exitCode: number | null
     combinedLen: number
     outputTail: string
+    ffmpegDevicesExitCode?: number | null
+    ffmpegDevicesTail?: string
+    ffmpegHasDshowInDevices?: boolean | null
   } | null
   devices: {
     index: number
     name: string
     inputChannels: number | null
     probeError?: string | null
+    dshowOptionsTail?: string | null
   }[]
   captureSource: 'env' | 'avfoundation' | 'dshow' | 'none'
   captureMode: 'auto' | 'manual' | 'off'
@@ -1294,6 +1370,18 @@ function MacAudioInputsPanel({
   const [captureChCount, setCaptureChCount] = useState(2)
   const [gainByIndex, setGainByIndex] = useState<Record<string, number>>({})
   const [channelCountAuto, setChannelCountAuto] = useState(true)
+  const compactBtnStyle: CSSProperties = {
+    padding: '6px 10px',
+    minHeight: 30,
+    borderRadius: 6,
+    border: '1px solid #4b5563',
+    background: '#1f2937',
+    color: '#e5e7eb',
+    fontSize: 12,
+    lineHeight: '16px',
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  }
 
   useEffect(() => {
     if (!data?.captureInputMatrix) return
@@ -1324,14 +1412,16 @@ function MacAudioInputsPanel({
   }, [data])
 
   const load = useCallback(
-    async (refreshList = false, probeAllDevices = false) => {
+    async (refreshList = false, probeAllDevices = false, dshowListOptions = false) => {
       const showBusy = refreshList || probeAllDevices
       if (showBusy) {
         setBusy(true)
         setLoadHint(
-          probeAllDevices
-            ? 'A correr ffprobe em todos os dispositivos (o pedido pode demorar alguns segundos; aguarda)…'
-            : 'A atualizar a lista de entradas…',
+          probeAllDevices && dshowListOptions
+            ? 'A correr ffprobe e list_options DirectShow em cada dispositivo (pode demorar bastante)…'
+            : probeAllDevices
+              ? 'A correr ffprobe em todos os dispositivos (o pedido pode demorar alguns segundos; aguarda)…'
+              : 'A atualizar a lista de entradas…',
         )
       }
       onError(null)
@@ -1339,6 +1429,7 @@ function MacAudioInputsPanel({
         const qs = new URLSearchParams()
         if (refreshList) qs.set('refresh', '1')
         if (probeAllDevices) qs.set('probe', 'all')
+        if (dshowListOptions) qs.set('dshowOptions', '1')
         const q = qs.toString()
         const path =
           q.length > 0
@@ -1725,10 +1816,25 @@ function MacAudioInputsPanel({
           <p style={{ margin: 0, color: '#9aa0a6', fontSize: 13 }}>
             Se a lista continuar vazia, corre na linha de comandos (na pasta do{' '}
             <code>ffmpeg.exe</code> do app, ou onde tiveres o ffmpeg){' '}
-            <code>ffmpeg -f dshow -list_devices true -i dummy</code> — se aí aparecerem dispositivos,
+            <code>ffmpeg -list_devices true -f dshow -i dummy</code> — se aí aparecerem dispositivos,
             envia o resultado ao suporte; se também vier vazio, o problema é do sistema/drivers, não do
             painel.
           </p>
+          {typeof data.dshowListDiag?.ffmpegHasDshowInDevices === 'boolean' ? (
+            <p style={{ margin: '0 0 8px', fontSize: 13, color: '#c9d1d9' }}>
+              <strong>ffmpeg -devices:</strong> indev DirectShow <code>dshow</code>{' '}
+              {data.dshowListDiag.ffmpegHasDshowInDevices ? (
+                <span style={{ color: '#81c995' }}>presente neste binário</span>
+              ) : (
+                <span style={{ color: '#f0883e' }}>
+                  não encontrado — este ffmpeg não foi compilado com captura DirectShow
+                </span>
+              )}
+              {data.dshowListDiag.ffmpegDevicesExitCode != null
+                ? ` (exit ${data.dshowListDiag.ffmpegDevicesExitCode})`
+                : ''}
+            </p>
+          ) : null}
           {data.dshowListDiag && data.dshowListDiag.outputTail ? (
             <details style={{ marginTop: 12, color: '#9aa0a6', fontSize: 12 }}>
               <summary style={{ cursor: 'pointer', color: '#79c0ff' }}>
@@ -1750,12 +1856,33 @@ function MacAudioInputsPanel({
               </pre>
             </details>
           ) : null}
+          {data.dshowListDiag?.ffmpegDevicesTail ? (
+            <details style={{ marginTop: 10, color: '#9aa0a6', fontSize: 12 }}>
+              <summary style={{ cursor: 'pointer', color: '#79c0ff' }}>
+                Saída de <code>ffmpeg -devices</code> (cauda)
+              </summary>
+              <pre
+                style={{
+                  marginTop: 8,
+                  overflow: 'auto',
+                  maxHeight: 220,
+                  background: '#0d1117',
+                  padding: 10,
+                  borderRadius: 6,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                }}
+              >
+                {data.dshowListDiag.ffmpegDevicesTail}
+              </pre>
+            </details>
+          ) : null}
         </div>
       ) : null}
       {data.devices.length > 0 ? (
         <div style={{ marginTop: 16 }}>
           <h3 style={{ fontSize: 15, marginBottom: 8 }}>
-            Dispositivos de entrada — entradas PCM (ffprobe)
+            Dispositivos de entrada — interface / endpoint e PCM (ffprobe)
           </h3>
           {data.ffprobeFound === false ? (
             <p
@@ -1799,7 +1926,10 @@ function MacAudioInputsPanel({
                     #
                   </th>
                   <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #394457' }}>
-                    Dispositivo
+                    Interface / driver
+                  </th>
+                  <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #394457' }}>
+                    Entrada (endpoint)
                   </th>
                   <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #394457' }}>
                     Entradas PCM
@@ -1813,6 +1943,7 @@ function MacAudioInputsPanel({
                 {data.devices.map((d) => {
                   const n = typeof d.inputChannels === 'number' ? d.inputChannels : null
                   const err = d.probeError || null
+                  const { entrada, interfaceDriver } = splitAudioDeviceEndpointName(d.name)
                   const note =
                     n != null
                       ? 'Medido com ffprobe nesta carga (ou em cache recente).'
@@ -1820,58 +1951,93 @@ function MacAudioInputsPanel({
                         ? err
                         : 'Sem medição para este índice nesta carga — clica «Provar todos (ffprobe)».'
                   return (
-                    <tr key={d.index} style={{ borderBottom: '1px solid #30363d' }}>
-                      <td style={{ padding: '8px 12px', verticalAlign: 'top', whiteSpace: 'nowrap' }}>
-                        <code>[{d.index}]</code>
-                      </td>
-                      <td style={{ padding: '8px 12px', verticalAlign: 'top' }}>{d.name}</td>
-                      <td
-                        style={{
-                          padding: '8px 12px',
-                          verticalAlign: 'top',
-                          fontWeight: 700,
-                          color: n != null ? '#81c995' : '#6e7681',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {n != null ? n : '—'}
-                      </td>
-                      <td
-                        style={{
-                          padding: '8px 12px',
-                          verticalAlign: 'top',
-                          color: n != null ? '#9aa0a6' : err ? '#f0883e' : '#6e7681',
-                          lineHeight: 1.45,
-                          maxWidth: 420,
-                        }}
-                      >
-                        {note}
-                      </td>
-                    </tr>
+                    <Fragment key={d.index}>
+                      <tr style={{ borderBottom: '1px solid #30363d' }}>
+                        <td style={{ padding: '8px 12px', verticalAlign: 'top', whiteSpace: 'nowrap' }}>
+                          <code>[{d.index}]</code>
+                        </td>
+                        <td style={{ padding: '8px 12px', verticalAlign: 'top', color: '#9aa0a6' }}>
+                          {interfaceDriver ?? '—'}
+                        </td>
+                        <td style={{ padding: '8px 12px', verticalAlign: 'top' }} title={d.name}>
+                          {entrada}
+                        </td>
+                        <td
+                          style={{
+                            padding: '8px 12px',
+                            verticalAlign: 'top',
+                            fontWeight: 700,
+                            color: n != null ? '#81c995' : '#6e7681',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {n != null ? n : '—'}
+                        </td>
+                        <td
+                          style={{
+                            padding: '8px 12px',
+                            verticalAlign: 'top',
+                            color: n != null ? '#9aa0a6' : err ? '#f0883e' : '#6e7681',
+                            lineHeight: 1.45,
+                            maxWidth: 320,
+                          }}
+                        >
+                          {note}
+                        </td>
+                      </tr>
+                      {d.dshowOptionsTail ? (
+                        <tr style={{ borderBottom: '1px solid #30363d' }}>
+                          <td colSpan={5} style={{ padding: '0 12px 10px 48px', background: '#0d1117' }}>
+                            <details>
+                              <summary style={{ cursor: 'pointer', color: '#79c0ff', fontSize: 12 }}>
+                                DirectShow: opções / pins (últimas linhas)
+                              </summary>
+                              <pre
+                                style={{
+                                  marginTop: 8,
+                                  overflow: 'auto',
+                                  maxHeight: 180,
+                                  background: '#161b22',
+                                  padding: 10,
+                                  borderRadius: 6,
+                                  whiteSpace: 'pre-wrap',
+                                  wordBreak: 'break-word',
+                                  fontSize: 11,
+                                  color: '#c9d1d9',
+                                }}
+                              >
+                                {d.dshowOptionsTail}
+                              </pre>
+                            </details>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
                   )
                 })}
               </tbody>
             </table>
           </div>
           <p style={{ margin: '10px 0 0', fontSize: 12, color: '#9aa0a6', maxWidth: 820 }}>
-            «<strong>Provar todos</strong>» corre ffprobe em <em>cada</em> linha (pode demorar). Sem
-            isso, só aparecem medições para a entrada em uso, a sugerida pela heurística, ou valores
-            em cache de há poucos segundos.
+            «<strong>Provar todos</strong>» corre ffprobe em <em>cada</em> linha (pode demorar). «
+            <strong>+ pins DirectShow</strong>» faz o mesmo e ainda corre <code>-list_options</code> por
+            dispositivo (bem mais lento). Sem isso, só aparecem medições para a entrada em uso, a
+            sugerida pela heurística, ou valores em cache de há poucos segundos.
           </p>
         </div>
       ) : null}
       {canEdit &&
       (data.platform === 'darwin' || data.platform === 'win32') &&
       data.captureSource !== 'env' ? (
-        <div style={{ marginTop: 20, display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+        <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             Usar entrada
             <select
               value={selectVal}
               onChange={(e) => setSelectVal(e.target.value)}
               style={{
-                minWidth: 260,
-                padding: '6px 8px',
+                minWidth: 220,
+                padding: '4px 8px',
                 background: '#252a33',
                 color: '#e8eaed',
                 border: '1px solid #555',
@@ -1887,17 +2053,18 @@ function MacAudioInputsPanel({
               ))}
             </select>
           </label>
-          <button type="button" disabled={busy} onClick={() => void applySelection('save')}>
+          <button type="button" style={compactBtnStyle} disabled={busy} onClick={() => void applySelection('save')}>
             Aplicar
           </button>
-          <button type="button" disabled={busy} onClick={() => void applySelection('clear')}>
+          <button type="button" style={compactBtnStyle} disabled={busy} onClick={() => void applySelection('clear')}>
             Só desligar
           </button>
-          <button type="button" disabled={busy} onClick={() => void load(true)}>
+          <button type="button" style={compactBtnStyle} disabled={busy} onClick={() => void load(true)}>
             Atualizar lista
           </button>
           <button
             type="button"
+            style={compactBtnStyle}
             disabled={busy || permBusy}
             title="Mostra o pedido do macOS ou do Windows para microfone / captura de áudio"
             onClick={() => void requestOsMicPermission()}
@@ -1906,12 +2073,24 @@ function MacAudioInputsPanel({
           </button>
           <button
             type="button"
+            style={compactBtnStyle}
             disabled={busy}
             title="Corre ffprobe em cada dispositivo (pode demorar)"
             onClick={() => void load(true, true)}
           >
             Provar todos (ffprobe)
           </button>
+          {data.platform === 'win32' ? (
+            <button
+              type="button"
+              style={compactBtnStyle}
+              disabled={busy}
+              title="ffprobe + list_options DirectShow por dispositivo — muito lento"
+              onClick={() => void load(true, true, true)}
+            >
+              Provar todos + pins DirectShow
+            </button>
+          ) : null}
         </div>
       ) : null}
       {!canEdit && data.platform === 'darwin' && data.devices.length > 0 ? (

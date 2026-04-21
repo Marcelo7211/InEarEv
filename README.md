@@ -14,6 +14,12 @@ npm install
 npm run dev
 ```
 
+No **Windows**, após `npm install` corre um `postinstall` que tenta descarregar **ffmpeg/ffprobe** para `apps/desktop-server/resources/ffmpeg-win/` (não falha o install se a rede falhar). Se o painel disser que o ffmpeg não foi encontrado, corre manualmente na pasta `apps/desktop-server`:
+
+```bash
+node scripts/download-ffmpeg-windows.cjs
+```
+
 Credenciais padrão (primeira execução cria `inear-state.json` em `userData` do Electron):
 
 | Usuário     | Senha        | Papel     |

@@ -32,8 +32,8 @@ class PcmAudioTrackSink(private val sampleRate: Int = 48_000) {
             )
             if (minBuf <= 0) return
       val lowLatency = latencyProfile == "low"
-      val bufBytes = (minBuf * if (lowLatency) 1 else 2).coerceAtLeast(minBuf)
-      maxQueuedFrames = if (lowLatency) 2 else 4
+      val bufBytes = (minBuf * if (lowLatency) 1 else 2).coerceAtLeast(minBuf / 2)
+      maxQueuedFrames = if (lowLatency) 1 else 3
             val attr = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
@@ -117,7 +117,7 @@ class PcmAudioTrackSink(private val sampleRate: Int = 48_000) {
       synchronized(lock) {
         while (running && frameQueue.isEmpty()) {
           try {
-            (lock as java.lang.Object).wait(25)
+            (lock as java.lang.Object).wait(if (maxQueuedFrames <= 1) 6 else 20)
           } catch (_: InterruptedException) {
             return
           }

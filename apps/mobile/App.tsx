@@ -89,12 +89,16 @@ type AudioCaptureDevicesRes = {
     exitCode: number | null
     combinedLen: number
     outputTail: string
+    ffmpegDevicesExitCode?: number | null
+    ffmpegDevicesTail?: string
+    ffmpegHasDshowInDevices?: boolean | null
   } | null
   devices: {
     index: number
     name: string
     inputChannels: number | null
     probeError?: string | null
+    dshowOptionsTail?: string | null
   }[]
   captureSource: 'env' | 'avfoundation' | 'dshow' | 'none'
   captureMode: 'auto' | 'manual' | 'off'
@@ -393,7 +397,7 @@ export default function App() {
   const [webErr, setWebErr] = useState<string | null>(null)
   const [retornoOpen, setRetornoOpen] = useState(false)
   const [retornoLatency, setRetornoLatency] =
-    useState<StreamRetornoLatency>('stable')
+    useState<StreamRetornoLatency>('low')
   const [pcAudioStatus, setPcAudioStatus] = useState<PcAudioStatus | null>(null)
   const [audioDevices, setAudioDevices] = useState<AudioCaptureDevicesRes | null>(null)
   const [audioInputLevels, setAudioInputLevels] = useState<AudioInputLevelsRes | null>(
@@ -457,16 +461,20 @@ export default function App() {
     void refetchRetornoShowfile()
   }, [refetchRetornoShowfile])
 
+  const effectiveRetornoLatency: StreamRetornoLatency = nativeRetornoAudio.isAvailable()
+    ? 'low'
+    : retornoLatency
+
   const streamWsUrl = useMemo(() => {
     if (!session || session.role !== 'musician') return null
     try {
       const u = new URL(normalizedApiBase)
       u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:'
-      return `${u.origin}/api/stream/audio?token=${encodeURIComponent(session.token)}&latency=${encodeURIComponent(retornoLatency)}`
+      return `${u.origin}/api/stream/audio?token=${encodeURIComponent(session.token)}&latency=${encodeURIComponent(effectiveRetornoLatency)}`
     } catch {
       return null
     }
-  }, [session, normalizedApiBase, retornoLatency])
+  }, [session, normalizedApiBase, effectiveRetornoLatency])
 
   /** Libera o retorno assim que a mesa já tiver canais visíveis; divergência de N vira só aviso. */
   const retornoWebPlayerReady = Boolean(
@@ -479,12 +487,12 @@ export default function App() {
   const retornoHtml = useMemo(
     () =>
       streamWsUrl && session?.token
-        ? buildStreamRetornoPlayerHtml(streamWsUrl, retornoLatency, {
+        ? buildStreamRetornoPlayerHtml(streamWsUrl, effectiveRetornoLatency, {
             apiBase: normalizedApiBase.replace(/\/$/, ''),
             token: session.token,
           })
         : '',
-    [streamWsUrl, retornoLatency, normalizedApiBase, session?.token],
+    [streamWsUrl, effectiveRetornoLatency, normalizedApiBase, session?.token],
   )
 
   const panelUri = useMemo(() => {
@@ -935,7 +943,7 @@ export default function App() {
             {streamWsUrl && nativeRetornoAudio.isAvailable() ? (
               <RetornoNativeConsole
                 wsUrl={streamWsUrl}
-                latencyProfile={retornoLatency}
+                latencyProfile={effectiveRetornoLatency}
                 masterGain={retornoMasterGain}
                 onMasterGainChange={setRetornoMasterGain}
               />

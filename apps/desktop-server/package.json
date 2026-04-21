@@ -4,10 +4,12 @@
   "private": true,
   "main": "main-process/main.cjs",
   "scripts": {
+    "postinstall": "node scripts/postinstall-ffmpeg-win-optional.cjs",
     "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 node scripts/run-electron.cjs\"",
     "build:renderer": "vite build",
     "build": "npm run build:renderer",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "ffmpeg:win": "node scripts/download-ffmpeg-windows.cjs",
     "dist:win": "node scripts/download-ffmpeg-windows.cjs && npm run build && electron-builder --win nsis portable"
   },
   "build": {
@@ -52,6 +54,8 @@
     "express": "^4.21.2",
     "express-rate-limit": "^7.5.0",
     "jsonwebtoken": "^9.0.2",
+    "node-pre-gyp": "^0.17.0",
+    "wrtc": "^0.4.7",
     "ws": "^8.18.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
