@@ -81,10 +81,11 @@ class RetornoAudioEngine(
             lastSeq = null
             _stats.value = RetornoStats(transport = "starting", connected = false, playing = false)
             try {
-                if (tryWebRtc(apiBase, token, latency)) return@launch
                 val host = URL(apiBase.trim().trimEnd('/')).host
                 if (tryUdp(host, token, latency)) return@launch
                 tryWebSocket(apiBase, token, latency)
+                if (stats.value.playing) return@launch
+                if (tryWebRtc(apiBase, token, latency)) return@launch
             } catch (e: Exception) {
                 _stats.value = RetornoStats(
                     transport = "error",
