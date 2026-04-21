@@ -238,20 +238,23 @@ class RetornoAudioEngine(
     }
 
     private fun onIne1Frame(frame: Ine1Decoder.Frame) {
+        var gapAdd = 0
         val prev = lastSeq
         lastSeq = frame.sequence
         if (prev != null) {
             val expected = (prev + 1) and 0x7fff_ffff
             if (frame.sequence != expected) {
-                val delta = (frame.sequence - prev - 1).coerceIn(0, 10_000)
-                if (delta > 0) {
-                    _stats.update { s -> s.copy(sequenceGaps = s.sequenceGaps + delta) }
-                }
+                gapAdd = (frame.sequence - prev - 1).coerceIn(0, 10_000)
             }
         }
         sink.writeInterleavedS16(frame.pcmInterleavedS16, frame.pcmInterleavedS16.size)
-        _stats.update { s -> s.copy(framesReceived = s.framesReceived + 1) }
-        _stats.update { s -> s.copy(queuedFrames = sink.queuedFrames()) }
+        _stats.update { s ->
+            s.copy(
+                framesReceived = s.framesReceived + 1,
+                queuedFrames = sink.queuedFrames(),
+                sequenceGaps = if (gapAdd > 0) s.sequenceGaps + gapAdd else s.sequenceGaps,
+            )
+        }
     }
 
     fun setMasterGain(g: Float) {

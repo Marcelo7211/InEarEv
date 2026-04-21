@@ -3,6 +3,7 @@ package com.inear.android.audio
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.os.Build
 import java.util.ArrayDeque
 import kotlin.concurrent.thread
 import kotlin.math.roundToInt
@@ -31,25 +32,30 @@ class PcmAudioTrackSink(private val sampleRate: Int = 48_000) {
                 AudioFormat.ENCODING_PCM_16BIT,
             )
             if (minBuf <= 0) return
-      val lowLatency = latencyProfile == "low"
-      // low: não ficar abaixo de minBuf nem fila de 1 frame (underrun/crackle); 2 frames amortiza bursts pós-reg UDP.
-      val bufBytes = if (lowLatency) minBuf else (minBuf * 2).coerceAtLeast(minBuf / 2)
-      maxQueuedFrames = if (lowLatency) 2 else 3
+            val lowLatency = latencyProfile == "low"
+            // Retorno = mix musical, não microfone: USAGE_MEDIA evita AEC/AGC de "voz" (som robótico).
+            // Fila e buffer grandes absorvem jitter UDP/WS; fila curta descartava frames e gerava chiado.
+            val bufBytes = (if (lowLatency) minBuf * 3 else minBuf * 5).coerceAtLeast(minBuf)
+            maxQueuedFrames = if (lowLatency) 12 else 28
             val attr = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                 .build()
             val fmt = AudioFormat.Builder()
                 .setSampleRate(sampleRate)
                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                 .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
                 .build()
-            val t = AudioTrack.Builder()
+            val tb = AudioTrack.Builder()
                 .setAudioAttributes(attr)
                 .setAudioFormat(fmt)
                 .setBufferSizeInBytes(bufBytes)
                 .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                tb.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_NONE)
+            }
+            val t = tb.build()
+            t.setVolume(AudioTrack.VOLUME_MAX)
             t.play()
             track = t
       running = true
@@ -118,7 +124,7 @@ class PcmAudioTrackSink(private val sampleRate: Int = 48_000) {
       synchronized(lock) {
         while (running && frameQueue.isEmpty()) {
           try {
-            (lock as java.lang.Object).wait(if (maxQueuedFrames <= 2) 10 else 20)
+            (lock as java.lang.Object).wait(25)
           } catch (_: InterruptedException) {
             return
           }
