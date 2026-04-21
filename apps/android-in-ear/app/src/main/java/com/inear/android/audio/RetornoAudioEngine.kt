@@ -169,6 +169,8 @@ class RetornoAudioEngine(
         val jWs = scope.launch(Dispatchers.IO) {
             runWsRace(apiBase, token, latency, me = RingTransport.WS, ::tryWin, ::otherWon)
         }
+        // WebRTC não compete no arranque: INE1 (UDP/WS) tem prioridade; RTP só depois evita ganhar com áudio instável.
+        delay(380L)
         val jRtc = scope.launch(Dispatchers.IO) {
             runRtcRace(apiBase, token, latency, me = RingTransport.WEBRTC, winRef, ::tryWin, ::otherWon)
         }
@@ -391,7 +393,9 @@ class RetornoAudioEngine(
         otherWon: (RingTransport) -> Boolean,
     ) {
         var peer: PeerConnection? = null
-        val gotAudioTrack = AtomicBoolean(false)
+        val recvTrackReady = AtomicBoolean(false)
+        val iceConnected = AtomicBoolean(false)
+        val pendingAudioTrack = AtomicReference<AudioTrack?>(null)
         try {
             if (otherWon(me)) return
             if (!ensureWebRtcFactory(appContext)) return
@@ -405,8 +409,16 @@ class RetornoAudioEngine(
                 object : PeerConnection.Observer {
                     override fun onSignalingChange(newState: PeerConnection.SignalingState) {}
                     override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState) {
-                        if (newState == PeerConnection.IceConnectionState.FAILED) {
-                            _stats.update { it.copy(lastError = "webrtc ice failed", connected = false) }
+                        when (newState) {
+                            PeerConnection.IceConnectionState.CONNECTED,
+                            PeerConnection.IceConnectionState.COMPLETED,
+                            -> {
+                                iceConnected.set(true)
+                            }
+                            PeerConnection.IceConnectionState.FAILED -> {
+                                _stats.update { it.copy(lastError = "webrtc ice failed", connected = false) }
+                            }
+                            else -> Unit
                         }
                     }
                     override fun onIceConnectionReceivingChange(receiving: Boolean) {}
@@ -420,17 +432,17 @@ class RetornoAudioEngine(
                     override fun onAddTrack(receiver: org.webrtc.RtpReceiver, streams: Array<out org.webrtc.MediaStream>) {
                         val track = receiver.track()
                         if (track is AudioTrack) {
-                            track.setEnabled(true)
-                            forceSpeakerRoute()
-                            gotAudioTrack.set(true)
+                            track.setEnabled(false)
+                            pendingAudioTrack.set(track)
+                            recvTrackReady.set(true)
                         }
                     }
                     override fun onTrack(transceiver: RtpTransceiver) {
                         val tr = transceiver.receiver.track()
                         if (tr is AudioTrack) {
-                            tr.setEnabled(true)
-                            forceSpeakerRoute()
-                            gotAudioTrack.set(true)
+                            tr.setEnabled(false)
+                            pendingAudioTrack.set(tr)
+                            recvTrackReady.set(true)
                         }
                     }
                 },
@@ -468,8 +480,11 @@ class RetornoAudioEngine(
                 return
             }
             setRemote(created, SessionDescription(SessionDescription.Type.ANSWER, ans.sdp))
-            forceSpeakerRoute()
-            waitUntilTrueOrTimeout({ gotAudioTrack.get() || otherWon(me) }, maxWaitMs = 900L, pollMs = 12L)
+            waitUntilTrueOrTimeout(
+                { (recvTrackReady.get() && iceConnected.get()) || otherWon(me) },
+                maxWaitMs = 1400L,
+                pollMs = 12L,
+            )
             if (otherWon(me)) {
                 try {
                     created.close()
@@ -479,7 +494,7 @@ class RetornoAudioEngine(
                 restoreAudioRoute()
                 return
             }
-            if (!gotAudioTrack.get()) {
+            if (!recvTrackReady.get() || !iceConnected.get()) {
                 try {
                     created.close()
                 } catch (_: Exception) {
@@ -488,6 +503,7 @@ class RetornoAudioEngine(
                 restoreAudioRoute()
                 return
             }
+            delay(80L)
             if (!tryWin(me)) {
                 try {
                     created.close()
@@ -497,6 +513,8 @@ class RetornoAudioEngine(
                 restoreAudioRoute()
                 return
             }
+            forceSpeakerRoute()
+            pendingAudioTrack.get()?.setEnabled(true)
             _stats.update {
                 it.copy(transport = "webrtc", connected = true, playing = true, lastError = null, queuedFrames = 0)
             }
