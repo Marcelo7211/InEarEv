@@ -1245,6 +1245,11 @@ type AudioCaptureDevicesRes = {
   ffmpegFound?: boolean
   usingBundledWinFfmpeg?: boolean
   ffprobeFound?: boolean
+  dshowListDiag?: {
+    exitCode: number | null
+    combinedLen: number
+    outputTail: string
+  } | null
   devices: {
     index: number
     name: string
@@ -1284,6 +1289,7 @@ function MacAudioInputsPanel({
   const [data, setData] = useState<AudioCaptureDevicesRes | null>(null)
   const [selectVal, setSelectVal] = useState<string>(SEL_AUTO)
   const [busy, setBusy] = useState(false)
+  const [permBusy, setPermBusy] = useState(false)
   const [loadHint, setLoadHint] = useState<string | null>(null)
   const [captureChCount, setCaptureChCount] = useState(2)
   const [gainByIndex, setGainByIndex] = useState<Record<string, number>>({})
@@ -1365,6 +1371,33 @@ function MacAudioInputsPanel({
   useEffect(() => {
     void load()
   }, [load])
+
+  const requestOsMicPermission = useCallback(async () => {
+    const fn =
+      typeof window !== 'undefined' ? window.inearDesktop?.requestCapturePermission : undefined
+    if (typeof fn !== 'function') {
+      onError(
+        'O pedido de permissão ao sistema só está disponível na aplicação inEar Desktop (Electron), não no browser.',
+      )
+      return
+    }
+    setPermBusy(true)
+    onError(null)
+    try {
+      const r = await fn()
+      if (!r?.ok) {
+        onError(
+          `Permissão de microfone/captura: ${r?.detail || 'recusada ou indisponível'}. Nas definições de privacidade do sistema, permite o inEar Desktop.`,
+        )
+      } else {
+        await load(true)
+      }
+    } catch (e) {
+      onError(String((e as Error).message))
+    } finally {
+      setPermBusy(false)
+    }
+  }, [load, onError])
 
   async function applySelection(mode: 'save' | 'clear') {
     if (!canEdit) return
@@ -1484,14 +1517,16 @@ function MacAudioInputsPanel({
       <p style={{ color: '#9aa0a6', maxWidth: 720 }}>
         O servidor <strong>lista as entradas</strong> com o <code>ffmpeg</code>: no{' '}
         <strong>macOS</strong> via AVFoundation; no <strong>Windows</strong> via DirectShow
-        (<code>dshow</code>). Em modo <strong>automático</strong>, tenta reconhecer interfaces
-        comuns (ex. Focusrite, Zoom, VB-Audio/CABLE, microfone USB…). No macOS, para várias
-        interfaces ao mesmo tempo, cria um <strong>dispositivo agregado</strong> no Utilitário
-        Áudio MIDI e escolhe-o aqui; define o <strong>número de canais (N)</strong> e sincroniza
-        a mesa. Opcional: <code>INEAR_CAPTURE_DEVICE_SUBSTRING=nome</code>. Estado em{' '}
-        <code>inear-state.json</code>. Se <code>INEAR_CAPTURE_CMD</code> existir, tem prioridade
-        — o teu comando deve usar o mesmo <code>-ac N</code> que o N configurado. No Windows,
-        instala o <code>ffmpeg</code> completo no PATH (ou <code>INEAR_FFMPEG</code>).
+        (<code>dshow</code>). Na aplicação <strong>inEar Desktop</strong> (Electron), ao abrir a
+        janela o <strong>macOS</strong> ou o <strong>Windows</strong> pode mostrar um pedido de
+        acesso ao <strong>microfone</strong> — aceita para o sistema permitir listar e capturar
+        áudio. Podes voltar a pedir com o botão <strong>Pedir permissão de microfone</strong> abaixo.
+        Em modo <strong>automático</strong>, tenta reconhecer interfaces comuns (ex. Focusrite,
+        Zoom, VB-Audio/CABLE…). No macOS, para várias interfaces, usa um <strong>dispositivo
+        agregado</strong> no Utilitário Áudio MIDI. Opcional:{' '}
+        <code>INEAR_CAPTURE_DEVICE_SUBSTRING=nome</code>. Estado em <code>inear-state.json</code>.
+        Se <code>INEAR_CAPTURE_CMD</code> existir, tem prioridade. No instalador Windows o{' '}
+        <code>ffmpeg</code> vai embutido; em dev podes usar PATH ou <code>INEAR_FFMPEG</code>.
       </p>
       {data.platform === 'darwin' && data.captureSource !== 'env' ? (
         <div
@@ -1645,11 +1680,77 @@ function MacAudioInputsPanel({
       {data.devices.length === 0 &&
       data.platform === 'win32' &&
       data.ffmpegFound === true ? (
-        <p style={{ color: '#f28b82', marginTop: 8, maxWidth: 820, lineHeight: 1.55 }}>
-          <strong>ffmpeg encontrado</strong>, mas a lista DirectShow veio vazia. Confirma: permissões
-          de microfone em Definições → Privacidade → Microfone; drivers de áudio atualizados; nenhum
-          outro programa a bloquear o dispositivo exclusivamente. Tenta &quot;Atualizar lista&quot;.
-        </p>
+        <div
+          style={{
+            marginTop: 12,
+            padding: 14,
+            borderRadius: 8,
+            border: '1px solid #8b5a2b',
+            background: '#2d1f14',
+            color: '#e8eaed',
+            maxWidth: 860,
+            lineHeight: 1.55,
+          }}
+        >
+          <p style={{ margin: '0 0 10px', color: '#f0883e' }}>
+            <strong>ffmpeg encontrado</strong>, mas a lista DirectShow veio vazia. No Windows 10/11
+            isto costuma ser <strong>permissão de microfone</strong> ou política que bloqueia apps de
+            ambiente de trabalho.
+          </p>
+          <ol style={{ margin: '0 0 12px', paddingLeft: 22, color: '#c9d1d9' }}>
+            <li>
+              Abre as definições do microfone:{' '}
+              <a href="ms-settings:privacy-microphone" style={{ color: '#58a6ff' }}>
+                ms-settings:privacy-microphone
+              </a>
+              .
+            </li>
+            <li>
+              Liga <strong>Acesso ao microfone</strong> e, no Windows 11, liga também{' '}
+              <strong>Permitir que as aplicações de ambiente de trabalho acedam ao microfone</strong>{' '}
+              (ou equivalente em inglês: &quot;Let desktop apps access your microphone&quot;).
+            </li>
+            <li>
+              Em <strong>Definições → Sistema → Som</strong>, confirma que há entradas listadas; se a
+              interface não aparece, atualiza o driver (Fabricante do PC / Realtek / Focusrite…).
+            </li>
+            <li>
+              Fecha outras apps que possam estar a usar o microfone em exclusivo (Teams, Zoom, DAW).
+            </li>
+            <li>
+              <strong>Reinicia o inEar Desktop</strong> depois de alterar as definições e carrega em
+              &quot;Atualizar lista&quot; abaixo.
+            </li>
+          </ol>
+          <p style={{ margin: 0, color: '#9aa0a6', fontSize: 13 }}>
+            Se a lista continuar vazia, corre na linha de comandos (na pasta do{' '}
+            <code>ffmpeg.exe</code> do app, ou onde tiveres o ffmpeg){' '}
+            <code>ffmpeg -f dshow -list_devices true -i dummy</code> — se aí aparecerem dispositivos,
+            envia o resultado ao suporte; se também vier vazio, o problema é do sistema/drivers, não do
+            painel.
+          </p>
+          {data.dshowListDiag && data.dshowListDiag.outputTail ? (
+            <details style={{ marginTop: 12, color: '#9aa0a6', fontSize: 12 }}>
+              <summary style={{ cursor: 'pointer', color: '#79c0ff' }}>
+                Diagnóstico técnico (últimas linhas da saída do ffmpeg, exit {String(data.dshowListDiag.exitCode)})
+              </summary>
+              <pre
+                style={{
+                  marginTop: 8,
+                  overflow: 'auto',
+                  maxHeight: 220,
+                  background: '#0d1117',
+                  padding: 10,
+                  borderRadius: 6,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                }}
+              >
+                {data.dshowListDiag.outputTail}
+              </pre>
+            </details>
+          ) : null}
+        </div>
       ) : null}
       {data.devices.length > 0 ? (
         <div style={{ marginTop: 16 }}>
@@ -1794,6 +1895,14 @@ function MacAudioInputsPanel({
           </button>
           <button type="button" disabled={busy} onClick={() => void load(true)}>
             Atualizar lista
+          </button>
+          <button
+            type="button"
+            disabled={busy || permBusy}
+            title="Mostra o pedido do macOS ou do Windows para microfone / captura de áudio"
+            onClick={() => void requestOsMicPermission()}
+          >
+            Pedir permissão de microfone
           </button>
           <button
             type="button"

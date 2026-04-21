@@ -13,6 +13,8 @@ declare global {
     inearDesktop?: {
       isElectron: boolean
       apiBase?: () => string
+      /** Pedido explícito de permissão de microfone/captura (processo principal Electron). */
+      requestCapturePermission?: () => Promise<{ ok: boolean; detail?: string }>
     }
   }
 }

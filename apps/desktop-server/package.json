@@ -34,6 +34,11 @@
         "portable"
       ]
     },
+    "mac": {
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "O inEar Desktop precisa de acesso ao microfone e às entradas de áudio para listar dispositivos e enviar o retorno aos músicos na rede local."
+      }
+    },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,

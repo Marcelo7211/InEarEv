@@ -652,7 +652,11 @@ function ffmpegDshowChannelCountSync(ffmpeg, deviceName, spawnOpts) {
     'null',
     '-',
   ]
-  const r = spawnSync(ffmpeg, args, { ...spawnOpts, windowsHide: true })
+  const r = spawnSync(ffmpeg, args, {
+    ...spawnOpts,
+    windowsHide: true,
+    cwd: spawnOpts.cwd || path.dirname(ffmpeg),
+  })
   const log = `${r.stderr || ''}${r.stdout || ''}`
   if (r.error) {
     return { best: null, errMsg: truncateProbeMsg(r.error.message || String(r.error)) }
@@ -696,6 +700,7 @@ async function ffmpegDshowChannelCountAsync(ffmpeg, deviceName, execOpts) {
     const { stdout, stderr } = await execFileP(ffmpeg, args, {
       ...execOpts,
       windowsHide: true,
+      cwd: execOpts.cwd || path.dirname(ffmpeg),
     })
     const log = `${stderr || ''}${stdout || ''}`
     const n = parseFfmpegProbeLogForAudioChannelCount(log)
@@ -743,6 +748,7 @@ function probeDshowInputChannelsResult(deviceName, opts = {}) {
     env: augmentPathForFfmpeg(process.env),
     timeout: 15000,
     windowsHide: true,
+    cwd: path.dirname(ffprobe),
   }
   const args = [
     '-hide_banner',
@@ -833,6 +839,7 @@ async function probeDshowInputChannelsResultAsync(deviceName, opts = {}) {
     encoding: 'utf8',
     env: augmentPathForFfmpeg(process.env),
     windowsHide: true,
+    cwd: path.dirname(ffprobe),
   }
   const args = [
     '-hide_banner',
@@ -913,22 +920,97 @@ function parseAvfAudioDevices(stderr) {
   return devices
 }
 
-/** @returns {Array<{ index: number, name: string }>} */
-function parseDshowAudioDevices(text) {
-  const lines = String(text || '').split(/\r?\n/)
-  const aIdx = lines.findIndex((l) => /DirectShow audio devices/i.test(l))
-  if (aIdx === -1) return []
-  const names = []
-  const videoRe = /DirectShow video devices/i
-  for (let i = aIdx + 1; i < lines.length; i++) {
-    const raw = lines[i]
-    if (!raw) continue
-    if (videoRe.test(raw)) break
-    if (/Alternative name/i.test(raw)) continue
-    const m = raw.match(/"([^"]+)"/)
-    if (m) names.push(m[1])
+/**
+ * Saída de ffmpeg no Windows pode vir em UTF-8, UTF-16 ou página de código; isto evita lista vazia por parsing falhado.
+ * @param {Buffer | string | undefined | null} stderrBuf
+ * @param {Buffer | string | undefined | null} stdoutBuf
+ */
+function decodeFfmpegDeviceListBuffers(stderrBuf, stdoutBuf) {
+  const decodeOne = (buf) => {
+    if (buf == null) return ''
+    if (typeof buf === 'string') return buf
+    if (!Buffer.isBuffer(buf) || buf.length === 0) return ''
+    const b = buf
+    if (b.length >= 2 && b[0] === 0xff && b[1] === 0xfe) {
+      return b.slice(2).toString('utf16le')
+    }
+    const utf8 = b.toString('utf8')
+    if (/DirectShow|dshow|ffmpeg version|libav/i.test(utf8)) return utf8
+    let utf16Score = 0
+    const sampleLen = Math.min(200, b.length)
+    for (let i = 1; i < sampleLen; i += 2) {
+      if (b[i] === 0 && b[i - 1] !== 0) utf16Score++
+    }
+    if (utf16Score > 12 && b.length > 64) {
+      const u16 = b.toString('utf16le')
+      if (/DirectShow|dshow/i.test(u16)) return u16
+    }
+    return utf8
   }
-  return names.map((name, index) => ({ index, name }))
+  return `${decodeOne(stderrBuf)}\n${decodeOne(stdoutBuf)}`
+}
+
+function uniqueDshowDeviceNames(names) {
+  const seen = new Set()
+  const out = []
+  for (const raw of names) {
+    const n = String(raw || '').trim()
+    if (!n || /^dummy$/i.test(n)) continue
+    const k = n.toLowerCase()
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(n)
+  }
+  return out.map((name, index) => ({ index, name }))
+}
+
+/**
+ * Extrai nomes de dispositivos DirectShow a partir do log do ffmpeg.
+ * Suporta aspas tipográficas, BOM e variações de linha; o bloco "Diagnóstico" usa o mesmo texto.
+ * @returns {Array<{ index: number, name: string }>}
+ */
+function parseDshowAudioDevices(text) {
+  let raw = String(text || '')
+  raw = raw
+    .replace(/^\uFEFF/, '')
+    .replace(/\u201c|\u201d|\u201e|\u201f|\u00ab|\u00bb/g, '"')
+    .replace(/\u2018|\u2019/g, "'")
+    .replace(/\u00A0/g, ' ')
+  const lower = raw.toLowerCase()
+  const marker = 'directshow audio devices'
+  const idx = lower.indexOf(marker)
+  if (idx === -1) return []
+
+  const from = idx + marker.length
+  let chunk = raw.slice(from, from + 120000)
+  const stopM = chunk.match(/\n(?:Input #|Press \[q\]|files:|file:)/i)
+  if (stopM && stopM.index != null) chunk = chunk.slice(0, stopM.index)
+
+  const names = []
+  for (const m of chunk.matchAll(/\[dshow[^\]]*\]\s*"([^"]+)"/gi)) {
+    names.push(m[1])
+  }
+  if (names.length === 0) {
+    for (const line of chunk.split(/\r\n|[\n\r]/)) {
+      if (!line || /Alternative name/i.test(line)) continue
+      const m1 = line.match(/\[dshow[^\]]*\]\s*"([^"]+)"/i)
+      if (m1) names.push(m1[1])
+      else {
+        const m2 = line.match(/\[dshow[^\]]*\]\s*'([^']+)'/i)
+        if (m2) names.push(m2[1])
+      }
+    }
+  }
+  if (names.length === 0) {
+    for (const m of chunk.matchAll(/"([^"]{3,200})"/g)) {
+      const n = m[1].trim()
+      if (/^dummy$/i.test(n)) continue
+      if (/^@device_/i.test(n)) continue
+      if (/^(true|false|null|\d+)$/i.test(n)) continue
+      names.push(n)
+    }
+  }
+  return uniqueDshowDeviceNames(names)
 }
 
 /**
@@ -1175,6 +1257,13 @@ function createServices(app) {
   const rateLimit = require('express-rate-limit')
 
   let state = loadOrCreateState(userData)
+  /** Última listagem DirectShow (diagnóstico quando a lista vem vazia no Windows). */
+  let lastWinDshowListDiag = {
+    exitCode: /** @type {number | null} */ (null),
+    tail: '',
+    combinedLen: 0,
+    at: 0,
+  }
   /** @type {Map<string, { lastReportSeqGaps: number | null, samples: Array<{ t: number, rtt: number, gapsDelta: number }> }>} */
   const telemetryBySub = new Map()
   /** @type {Map<string, { address: string, port: number }>} */
@@ -1301,18 +1390,57 @@ function createServices(app) {
   function listDshowAudioDevices() {
     if (process.platform !== 'win32') return []
     const ffmpeg = findFfmpegExecutable()
-    if (!ffmpeg) return []
-    const r = spawnSync(
-      ffmpeg,
+    if (!ffmpeg) {
+      lastWinDshowListDiag = {
+        exitCode: null,
+        tail: '',
+        combinedLen: 0,
+        at: Date.now(),
+      }
+      return []
+    }
+    const ffDir = path.dirname(ffmpeg)
+    const attempts = [
       ['-hide_banner', '-f', 'dshow', '-list_devices', 'true', '-i', 'dummy'],
-      {
-        encoding: 'utf8',
+      ['-loglevel', 'info', '-f', 'dshow', '-list_devices', 'true', '-i', 'dummy'],
+      ['-hide_banner', '-f', 'dshow', '-list_devices', 'true', '-i', 'audio=dummy'],
+    ]
+    let best = /** @type {{ index: number, name: string }[]} */ ([])
+    let lastCombined = ''
+    let lastStatus = /** @type {number | null} */ (null)
+    for (const args of attempts) {
+      const r = spawnSync(ffmpeg, args, {
+        encoding: 'buffer',
+        maxBuffer: 50 * 1024 * 1024,
         env: augmentPathForFfmpeg(process.env),
         windowsHide: true,
-      },
-    )
-    const combined = `${r.stderr || ''}${r.stdout || ''}`
-    return parseDshowAudioDevices(combined)
+        cwd: ffDir,
+      })
+      const combined = decodeFfmpegDeviceListBuffers(r.stderr, r.stdout)
+      lastCombined = combined
+      lastStatus = typeof r.status === 'number' ? r.status : null
+      const parsed = parseDshowAudioDevices(combined)
+      if (parsed.length > best.length) best = parsed
+      if (best.length > 0) break
+    }
+    const s = String(lastCombined)
+    lastWinDshowListDiag = {
+      exitCode: lastStatus,
+      tail: s.slice(-4000),
+      combinedLen: s.length,
+      at: Date.now(),
+    }
+    if (best.length === 0) {
+      console.warn(
+        '[inear] DirectShow: lista de áudio vazia após',
+        attempts.length,
+        'tentativas; exit=',
+        lastStatus,
+        'len=',
+        s.length,
+      )
+    }
+    return best
   }
 
   let pcCaptureDevicesCache = {
@@ -1355,7 +1483,10 @@ function createServices(app) {
       return n
     }
     const picked = pickPreferredAvfoundationDevice(devices)
-    return picked ? picked.index : null
+    if (picked) return picked.index
+    /* Sem heurística: usa a primeira entrada listada para modo automático (ex. Windows genérico). */
+    if (devices.length > 0) return devices[0].index
+    return null
   }
 
   /** @param {{ index: number, name: string }[]} devices */
@@ -1631,6 +1762,7 @@ function createServices(app) {
               stdio: ['ignore', 'pipe', 'inherit'],
               env: augmentPathForFfmpeg(process.env),
               windowsHide: true,
+              cwd: path.dirname(ffmpeg),
             })
             captureChild.stdout.on('data', pushCaptureChunk)
             captureChild.on('error', (err) =>
@@ -1992,6 +2124,15 @@ function createServices(app) {
         ffmpegFound,
         usingBundledWinFfmpeg,
         ffprobeFound,
+        ...(process.platform === 'win32' && devicesWithInputs.length === 0
+          ? {
+              dshowListDiag: {
+                exitCode: lastWinDshowListDiag.exitCode,
+                combinedLen: lastWinDshowListDiag.combinedLen,
+                outputTail: lastWinDshowListDiag.tail,
+              },
+            }
+          : {}),
         devices: devicesWithInputs,
         captureSource: meta.captureSource,
         captureMode: meta.mode,
@@ -2283,6 +2424,7 @@ function createServices(app) {
       return res.status(403).json({ error: 'forbidden' })
     }
     const envOn = Boolean(String(process.env.INEAR_CAPTURE_CMD || '').trim())
+    bustPcCaptureCaches()
     const devices = listPcAudioCaptureDevicesCached()
     const meta = computePcCaptureMeta(devices)
     const captureOk =
@@ -2309,7 +2451,9 @@ function createServices(app) {
     const n = normalizeCaptureChannelCount()
     const baseName =
       meta.effectiveName ||
-      (envOn ? 'Captura (INEAR_CAPTURE_CMD)' : 'Interface')
+      (envOn
+        ? 'Captura (INEAR_CAPTURE_CMD)'
+        : devices[0]?.name || 'Interface')
     const prevByIndex = new Map()
     for (const c of state.showfile.channels) {
       let k = null

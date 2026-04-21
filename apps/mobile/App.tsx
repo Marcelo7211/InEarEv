@@ -85,6 +85,11 @@ type AudioCaptureDevicesRes = {
   ffmpegFound?: boolean
   usingBundledWinFfmpeg?: boolean
   ffprobeFound?: boolean
+  dshowListDiag?: {
+    exitCode: number | null
+    combinedLen: number
+    outputTail: string
+  } | null
   devices: {
     index: number
     name: string
