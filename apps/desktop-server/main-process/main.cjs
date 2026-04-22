@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, systemPreferences, session } = require('electron')
 const path = require('path')
+const os = require('os')
 
 /** Pasta %APPDATA%\\inEar Desktop (alinha com NSIS e documentação). */
 app.setName('inEar Desktop')
@@ -8,6 +9,11 @@ app.setName('inEar Desktop')
 if (process.platform === 'win32') {
   try {
     app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess')
+  } catch {
+    /* ignore */
+  }
+  try {
+    os.setPriority(process.pid, os.constants.priority.PRIORITY_ABOVE_NORMAL)
   } catch {
     /* ignore */
   }

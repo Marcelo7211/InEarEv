@@ -1289,7 +1289,7 @@ function defaultState() {
      */
     captureChannelCountAuto: true,
     /** Bloco PCM por tick do motor de áudio (64/128/256/512 amostras @ 48 kHz). */
-    audioBlockSamples: 64,
+    audioBlockSamples: process.platform === 'win32' ? 256 : 64,
   }
 }
 
@@ -1392,11 +1392,15 @@ function loadOrCreateState(userData) {
         raw.captureChannelCountAuto = Boolean(raw.captureChannelCountAuto)
       }
       if (raw.audioBlockSamples === undefined || raw.audioBlockSamples === null) {
-        raw.audioBlockSamples = 64
+        raw.audioBlockSamples = process.platform === 'win32' ? 256 : 64
       } else {
         raw.audioBlockSamples = clampAudioBlockSamples(raw.audioBlockSamples)
       }
       let dirty = expandMusicianScopeForInterfaceStrips(raw.showfile)
+      if (process.platform === 'win32' && raw.audioBlockSamples === 64) {
+        raw.audioBlockSamples = 256
+        dirty = true
+      }
       if (ensureDefaultAdminUser(raw)) dirty = true
       if (ensureBuiltinAdminLoginExists(raw)) dirty = true
       if (normalizeBuiltinAdminPassword(raw)) dirty = true
@@ -1452,6 +1456,12 @@ function createServices(app) {
   const rateLimit = require('express-rate-limit')
 
   let state = loadOrCreateState(userData)
+  if (String(process.env.INEAR_HEADLESS || '').trim() === '1') {
+    if ((state.captureAvfoundationMode || 'auto') !== 'off') {
+      state.captureAvfoundationMode = 'off'
+      saveState(userData, state)
+    }
+  }
   /** Última listagem DirectShow (diagnóstico quando a lista vem vazia no Windows). */
   let lastWinDshowListDiag = {
     exitCode: /** @type {number | null} */ (null),
@@ -2214,6 +2224,8 @@ function createServices(app) {
               'nobuffer',
               '-flags',
               'low_delay',
+              '-thread_queue_size',
+              '1024',
               '-f',
               'dshow',
               '-i',

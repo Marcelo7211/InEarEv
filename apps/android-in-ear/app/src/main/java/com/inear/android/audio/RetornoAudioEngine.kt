@@ -312,13 +312,20 @@ class RetornoAudioEngine(
     private fun onIne1Frame(frame: Ine1Decoder.Frame) {
         var gapAdd = 0
         val prev = lastSeq
-        lastSeq = frame.sequence
         if (prev != null) {
-            val expected = (prev + 1) and 0x7fff_ffff
+            val mask = 0x7fff_ffffL
+            fun u31(x: Int): Long = x.toLong() and mask
+            val expected = ((u31(prev) + 1L) and mask).toInt()
             if (frame.sequence != expected) {
-                gapAdd = (frame.sequence - prev - 1).coerceIn(0, 10_000)
+                val ahead = ((u31(frame.sequence) - u31(expected) + (mask + 1L)) and mask).toInt()
+                val behind = ((u31(expected) - u31(frame.sequence) + (mask + 1L)) and mask).toInt()
+                if (behind in 1..200) {
+                    return
+                }
+                gapAdd = ahead.coerceIn(0, 10_000)
             }
         }
+        lastSeq = frame.sequence
 
         if (playoutSessionStartNs == 0L) {
             playoutSessionStartNs = System.nanoTime()
@@ -347,6 +354,14 @@ class RetornoAudioEngine(
                 else -> 220
             }
         if (totalReceivedMediaMs > 50.0 && sink.halQueuedMsApprox() > halCapMs) {
+            sink.drainPlayoutBuffer()
+            resetPlayoutDebt()
+        }
+
+        if (gapAdd in 1..3) {
+            val silent = ShortArray(frame.samplesPerChannel * gapAdd * 2)
+            sink.writeInterleavedS16(silent, silent.size)
+        } else if (gapAdd > 3) {
             sink.drainPlayoutBuffer()
             resetPlayoutDebt()
         }
