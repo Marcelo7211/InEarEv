@@ -1711,6 +1711,89 @@ function createServices(app) {
     levelsByIndex: {},
     updatedAt: 0,
   }
+  let captureDebugState = {
+    ffmpegPath: null,
+    captureKind: null,
+    captureDeviceName: null,
+    captureDeviceIndex: null,
+    startedAt: 0,
+    lastChunkAt: 0,
+    lastChunkBytes: 0,
+    totalBytes: 0,
+    lastStderrLines: [],
+    lastError: null,
+    lastExit: null,
+    lastUdpSendAt: 0,
+    lastUdpSendMusicianId: null,
+    lastWsSendAt: 0,
+    lastWsSendMusicianId: null,
+  }
+
+  function resetCaptureDebugState() {
+    captureDebugState = {
+      ffmpegPath: null,
+      captureKind: null,
+      captureDeviceName: null,
+      captureDeviceIndex: null,
+      startedAt: 0,
+      lastChunkAt: 0,
+      lastChunkBytes: 0,
+      totalBytes: 0,
+      lastStderrLines: [],
+      lastError: null,
+      lastExit: null,
+      lastUdpSendAt: 0,
+      lastUdpSendMusicianId: null,
+      lastWsSendAt: 0,
+      lastWsSendMusicianId: null,
+    }
+  }
+
+  function appendCaptureStderr(text) {
+    const lines = String(text || '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+    if (lines.length === 0) return
+    const merged = captureDebugState.lastStderrLines.concat(lines)
+    captureDebugState.lastStderrLines = merged.slice(-18)
+    captureDebugState.lastError = captureDebugState.lastStderrLines.at(-1) || null
+  }
+
+  function attachCaptureProcessDiagnostics(child, meta) {
+    if (!child) return
+    captureDebugState.captureKind = meta.captureKind || null
+    captureDebugState.captureDeviceName = meta.captureDeviceName || null
+    captureDebugState.captureDeviceIndex =
+      Number.isInteger(meta.captureDeviceIndex) ? meta.captureDeviceIndex : null
+    captureDebugState.ffmpegPath = meta.ffmpegPath || null
+    captureDebugState.startedAt = Date.now()
+    captureDebugState.lastError = null
+    captureDebugState.lastExit = null
+    if (child.stderr) {
+      child.stderr.on('data', (buf) => {
+        appendCaptureStderr(buf)
+      })
+    }
+    child.on('error', (err) => {
+      const msg = err && err.message ? String(err.message) : String(err)
+      captureDebugState.lastError = msg
+      console.error(`[inear] captura ${meta.captureKind || 'pc'} spawn:`, msg)
+    })
+    child.on('exit', (code, sig) => {
+      captureDebugState.lastExit = {
+        at: Date.now(),
+        code: typeof code === 'number' ? code : null,
+        signal: sig || null,
+      }
+      if (code || sig) {
+        console.warn(`[inear] captura ${meta.captureKind || 'pc'} terminou`, {
+          code,
+          sig,
+        })
+      }
+    })
+  }
 
   function monoByChannelAt(globalSample) {
     const sr = MVP_SAMPLE_RATE_HZ
@@ -1929,6 +2012,9 @@ function createServices(app) {
     if (captureBuf.length > capBytes) {
       captureBuf = captureBuf.subarray(captureBuf.length - capBytes)
     }
+    captureDebugState.lastChunkAt = Date.now()
+    captureDebugState.lastChunkBytes = chunk ? chunk.length : 0
+    captureDebugState.totalBytes += chunk ? chunk.length : 0
   }
 
   function stopCaptureChild() {
@@ -1942,6 +2028,7 @@ function createServices(app) {
     captureChild = null
     captureBuf = Buffer.alloc(0)
     captureMeterState = { levelsByIndex: {}, updatedAt: Date.now() }
+    resetCaptureDebugState()
   }
 
   function clamp01(v) {
@@ -2003,16 +2090,16 @@ function createServices(app) {
       const isWin = process.platform === 'win32'
       captureChild = isWin
         ? spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', cmd], {
-            stdio: ['ignore', 'pipe', 'inherit'],
+            stdio: ['ignore', 'pipe', 'pipe'],
           })
-        : spawn('/bin/sh', ['-c', cmd], { stdio: ['ignore', 'pipe', 'inherit'] })
+        : spawn('/bin/sh', ['-c', cmd], { stdio: ['ignore', 'pipe', 'pipe'] })
+      attachCaptureProcessDiagnostics(captureChild, {
+        captureKind: 'env',
+        captureDeviceName: 'INEAR_CAPTURE_CMD',
+        captureDeviceIndex: null,
+        ffmpegPath: String(cmd),
+      })
       captureChild.stdout.on('data', pushCaptureChunk)
-      captureChild.on('error', (err) =>
-        console.error('[inear] captura spawn:', err.message),
-      )
-      captureChild.on('exit', (code, sig) =>
-        console.warn('[inear] captura ffmpeg terminou', { code, sig }),
-      )
       return
     }
 
@@ -2069,16 +2156,16 @@ function createServices(app) {
             ffmpeg,
           )
           captureChild = spawn(ffmpeg, args, {
-            stdio: ['ignore', 'pipe', 'inherit'],
+            stdio: ['ignore', 'pipe', 'pipe'],
             env: augmentPathForFfmpeg(process.env),
           })
+          attachCaptureProcessDiagnostics(captureChild, {
+            captureKind: 'avfoundation',
+            captureDeviceName: devName,
+            captureDeviceIndex: n,
+            ffmpegPath: ffmpeg,
+          })
           captureChild.stdout.on('data', pushCaptureChunk)
-          captureChild.on('error', (err) =>
-            console.error('[inear] captura AVFoundation spawn:', err.message),
-          )
-          captureChild.on('exit', (code, sig) =>
-            console.warn('[inear] captura AVFoundation terminou', { code, sig }),
-          )
           return
         }
       } else if ((state.captureAvfoundationMode || 'auto') !== 'off') {
@@ -2144,18 +2231,18 @@ function createServices(app) {
               ffmpeg,
             )
             captureChild = spawn(ffmpeg, args, {
-              stdio: ['ignore', 'pipe', 'inherit'],
+              stdio: ['ignore', 'pipe', 'pipe'],
               env: augmentPathForFfmpeg(process.env),
               windowsHide: true,
               cwd: path.dirname(ffmpeg),
             })
+            attachCaptureProcessDiagnostics(captureChild, {
+              captureKind: 'dshow',
+              captureDeviceName: devName,
+              captureDeviceIndex: n,
+              ffmpegPath: ffmpeg,
+            })
             captureChild.stdout.on('data', pushCaptureChunk)
-            captureChild.on('error', (err) =>
-              console.error('[inear] captura DirectShow spawn:', err.message),
-            )
-            captureChild.on('exit', (code, sig) =>
-              console.warn('[inear] captura DirectShow terminou', { code, sig }),
-            )
             return
           }
         }
@@ -2415,6 +2502,60 @@ function createServices(app) {
       captureChannelCount: normalizeCaptureChannelCount(),
       captureChannelCountAuto: state.captureChannelCountAuto !== false,
       audioBlockSamples: clampAudioBlockSamples(state.audioBlockSamples),
+      captureDeviceName: meta.effectiveName || null,
+      captureLastError: captureDebugState.lastError,
+      captureLastGoodMsAgo: lastGoodCaptureMs ? Math.max(0, Date.now() - lastGoodCaptureMs) : null,
+    })
+  })
+  ex.get('/api/audio-debug', authMiddleware, (_req, res) => {
+    const envOn = Boolean(String(process.env.INEAR_CAPTURE_CMD || '').trim())
+    const devices = listPcAudioCaptureDevicesCached()
+    const meta = computePcCaptureMeta(devices)
+    const configured =
+      envOn ||
+      meta.captureSource === 'avfoundation' ||
+      meta.captureSource === 'dshow'
+    const receiving =
+      configured && captureChild && !captureChild.killed
+        ? Date.now() - lastGoodCaptureMs < 3000
+        : false
+    const wsClientCount = Array.from(wsAudioByMusician.values()).reduce(
+      (sum, set) => sum + set.size,
+      0,
+    )
+    res.json({
+      configured,
+      receiving,
+      captureSource: envOn ? 'env' : meta.captureSource,
+      captureMode: meta.mode,
+      captureDeviceName: meta.effectiveName || captureDebugState.captureDeviceName || null,
+      captureDeviceIndex:
+        meta.effectiveIndex != null ? meta.effectiveIndex : captureDebugState.captureDeviceIndex,
+      ffmpegPath: captureDebugState.ffmpegPath,
+      captureChildRunning: Boolean(captureChild && !captureChild.killed),
+      captureChannelCount: normalizeCaptureChannelCount(),
+      captureUnderruns,
+      captureBufferedBytes: captureBuf.length,
+      captureLastGoodMsAgo: lastGoodCaptureMs ? Math.max(0, Date.now() - lastGoodCaptureMs) : null,
+      captureLastChunkMsAgo: captureDebugState.lastChunkAt
+        ? Math.max(0, Date.now() - captureDebugState.lastChunkAt)
+        : null,
+      captureLastChunkBytes: captureDebugState.lastChunkBytes,
+      captureTotalBytes: captureDebugState.totalBytes,
+      captureLastError: captureDebugState.lastError,
+      captureLastExit: captureDebugState.lastExit,
+      captureStderrTail: captureDebugState.lastStderrLines,
+      udpTargetCount: udpTargets.size,
+      wsClientCount,
+      webrtcSessionCount: webrtcSessions.size,
+      lastUdpSendMsAgo: captureDebugState.lastUdpSendAt
+        ? Math.max(0, Date.now() - captureDebugState.lastUdpSendAt)
+        : null,
+      lastUdpSendMusicianId: captureDebugState.lastUdpSendMusicianId,
+      lastWsSendMsAgo: captureDebugState.lastWsSendAt
+        ? Math.max(0, Date.now() - captureDebugState.lastWsSendAt)
+        : null,
+      lastWsSendMusicianId: captureDebugState.lastWsSendMusicianId,
     })
   })
   ex.get('/api/audio-input-levels', authMiddleware, (_req, res) => {
@@ -3567,6 +3708,10 @@ function createServices(app) {
         )
         audioSock.send(udpWire, udpTarget.port, udpTarget.address, (err) => {
           if (err) console.warn('[udp send]', err.message)
+          else {
+            captureDebugState.lastUdpSendAt = Date.now()
+            captureDebugState.lastUdpSendMusicianId = musicianId
+          }
         })
       }
       const wsSet = wsAudioByMusician.get(musicianId)
@@ -3593,6 +3738,8 @@ function createServices(app) {
             }
             try {
               ws.send(wire, { binary: true })
+              captureDebugState.lastWsSendAt = Date.now()
+              captureDebugState.lastWsSendMusicianId = musicianId
             } catch {
               /* ignore */
             }

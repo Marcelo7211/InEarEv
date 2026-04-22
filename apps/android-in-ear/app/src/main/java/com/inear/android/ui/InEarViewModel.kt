@@ -11,8 +11,10 @@ import com.inear.android.net.MusicianStrip
 import com.inear.android.net.Showfile
 import com.inear.android.net.NetworkQualityResponse
 import com.inear.android.net.AudioInputLevelsResponse
+import com.inear.android.net.AudioDebugResponse
 import com.inear.android.net.parseJwtSub
 import com.inear.android.net.retornoMixerChannelOrder
+import com.inear.android.net.SessionInfoResponse
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -46,6 +48,12 @@ class InEarViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _audioInputLevels = MutableStateFlow<AudioInputLevelsResponse?>(null)
     val audioInputLevels: StateFlow<AudioInputLevelsResponse?> = _audioInputLevels.asStateFlow()
+
+    private val _sessionInfo = MutableStateFlow(SessionInfoResponse())
+    val sessionInfo: StateFlow<SessionInfoResponse> = _sessionInfo.asStateFlow()
+
+    private val _audioDebug = MutableStateFlow(AudioDebugResponse())
+    val audioDebug: StateFlow<AudioDebugResponse> = _audioDebug.asStateFlow()
 
     val latencyProfile = MutableStateFlow("pro")
 
@@ -215,6 +223,21 @@ class InEarViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 _audioInputLevels.value = repository.getAudioInputLevels(s.apiBase, s.token)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    fun refreshAudioDebug() {
+        val s = _session.value
+        if (s.token.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                _sessionInfo.value = repository.getSessionInfo(s.apiBase, s.token)
+            } catch (_: Exception) {
+            }
+            try {
+                _audioDebug.value = repository.getAudioDebug(s.apiBase, s.token)
             } catch (_: Exception) {
             }
         }

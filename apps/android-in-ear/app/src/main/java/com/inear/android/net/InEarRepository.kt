@@ -143,6 +143,38 @@ class InEarRepository(
         }
     }
 
+    suspend fun getSessionInfo(apiBase: String, bearer: String): SessionInfoResponse {
+        val base = apiBase.trim().trimEnd('/')
+        val req = Request.Builder()
+            .url("$base/api/session")
+            .header("Authorization", "Bearer $bearer")
+            .get()
+            .build()
+        return withContext(Dispatchers.IO) {
+            client.newCall(req).execute().use { resp ->
+                val text = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) error("session ${resp.code}: $text")
+                apiJson.decodeFromString<SessionInfoResponse>(text)
+            }
+        }
+    }
+
+    suspend fun getAudioDebug(apiBase: String, bearer: String): AudioDebugResponse {
+        val base = apiBase.trim().trimEnd('/')
+        val req = Request.Builder()
+            .url("$base/api/audio-debug")
+            .header("Authorization", "Bearer $bearer")
+            .get()
+            .build()
+        return withContext(Dispatchers.IO) {
+            client.newCall(req).execute().use { resp ->
+                val text = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) error("audio-debug ${resp.code}: $text")
+                apiJson.decodeFromString<AudioDebugResponse>(text)
+            }
+        }
+    }
+
     suspend fun createWebRtcAnswer(apiBase: String, bearer: String, offerSdp: String): WebRtcAnswerResponse {
         val base = apiBase.trim().trimEnd('/')
         val body = apiJson.encodeToString(

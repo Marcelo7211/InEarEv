@@ -98,6 +98,45 @@ data class AudioInputLevelsResponse(
 )
 
 @Serializable
+data class SessionInfoResponse(
+    val pcAudioCaptureConfigured: Boolean = false,
+    val pcAudioCaptureReceiving: Boolean = false,
+    val audioCaptureSource: String? = null,
+    val captureDeviceName: String? = null,
+    val captureChannelCount: Int = 0,
+    val captureLastError: String? = null,
+    val captureLastGoodMsAgo: Long? = null,
+)
+
+@Serializable
+data class AudioDebugResponse(
+    val configured: Boolean = false,
+    val receiving: Boolean = false,
+    val captureSource: String? = null,
+    val captureMode: String? = null,
+    val captureDeviceName: String? = null,
+    val captureDeviceIndex: Int? = null,
+    val ffmpegPath: String? = null,
+    val captureChildRunning: Boolean = false,
+    val captureChannelCount: Int = 0,
+    val captureUnderruns: Int = 0,
+    val captureBufferedBytes: Int = 0,
+    val captureLastGoodMsAgo: Long? = null,
+    val captureLastChunkMsAgo: Long? = null,
+    val captureLastChunkBytes: Int = 0,
+    val captureTotalBytes: Long = 0,
+    val captureLastError: String? = null,
+    val captureStderrTail: List<String> = emptyList(),
+    val udpTargetCount: Int = 0,
+    val wsClientCount: Int = 0,
+    val webrtcSessionCount: Int = 0,
+    val lastUdpSendMsAgo: Long? = null,
+    val lastUdpSendMusicianId: String? = null,
+    val lastWsSendMsAgo: Long? = null,
+    val lastWsSendMusicianId: String? = null,
+)
+
+@Serializable
 data class WebRtcAnswerResponse(
     val ok: Boolean = false,
     val sessionId: String? = null,

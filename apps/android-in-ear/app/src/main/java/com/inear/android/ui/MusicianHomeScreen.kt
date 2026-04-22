@@ -86,6 +86,8 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
     val stats by vm.audioEngine.stats.collectAsState()
     val net by vm.network.collectAsState()
     val inputLevels by vm.audioInputLevels.collectAsState()
+    val sessionInfo by vm.sessionInfo.collectAsState()
+    val audioDebug by vm.audioDebug.collectAsState()
     val lat by vm.latencyProfile.collectAsState()
     var master by remember { mutableFloatStateOf(1f) }
     var playing by remember { mutableStateOf(false) }
@@ -102,6 +104,13 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
         while (true) {
             vm.refreshAudioInputLevels()
             delay(if (playing) 120 else 850)
+        }
+    }
+
+    LaunchedEffect(playing) {
+        while (true) {
+            vm.refreshAudioDebug()
+            delay(if (playing) 1200 else 2800)
         }
     }
 
@@ -244,6 +253,36 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = if (inputLevels?.receiving == true) Color(0xFF81c995) else Color(0xFFf0883e),
+                    )
+                    Text(
+                        buildString {
+                            append("Captura PC: ")
+                            append(
+                                when {
+                                    sessionInfo.pcAudioCaptureReceiving -> "ativa"
+                                    sessionInfo.pcAudioCaptureConfigured -> "configurada sem PCM"
+                                    else -> "nao configurada"
+                                },
+                            )
+                            if (!sessionInfo.captureDeviceName.isNullOrBlank()) {
+                                append(" · ")
+                                append(sessionInfo.captureDeviceName)
+                            }
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (sessionInfo.pcAudioCaptureReceiving) Color(0xFF81c995) else Color(0xFFf0883e),
+                    )
+                    if (!audioDebug.captureLastError.isNullOrBlank()) {
+                        Text(
+                            "Ultimo erro Windows: ${audioDebug.captureLastError}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFFf85149),
+                        )
+                    }
+                    Text(
+                        "Diag: ultimo PCM ${audioDebug.captureLastGoodMsAgo ?: -1} ms · UDP alvo ${audioDebug.udpTargetCount} · WS ${audioDebug.wsClientCount}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF8b949e),
                     )
                 }
             }

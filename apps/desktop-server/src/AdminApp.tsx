@@ -1475,6 +1475,33 @@ type AudioCaptureDevicesRes = {
   mixerChannels: { id: string; name: string; captureInputIndex?: number }[]
 }
 
+type AudioDebugResponse = {
+  configured: boolean
+  receiving: boolean
+  captureSource: string | null
+  captureMode: string | null
+  captureDeviceName: string | null
+  captureDeviceIndex: number | null
+  ffmpegPath: string | null
+  captureChildRunning: boolean
+  captureChannelCount: number
+  captureUnderruns: number
+  captureBufferedBytes: number
+  captureLastGoodMsAgo: number | null
+  captureLastChunkMsAgo: number | null
+  captureLastChunkBytes: number
+  captureTotalBytes: number
+  captureLastError: string | null
+  captureStderrTail: string[]
+  udpTargetCount: number
+  wsClientCount: number
+  webrtcSessionCount: number
+  lastUdpSendMsAgo: number | null
+  lastUdpSendMusicianId: string | null
+  lastWsSendMsAgo: number | null
+  lastWsSendMusicianId: string | null
+}
+
 const SEL_AUTO = '__auto__'
 const SEL_OFF = '__off__'
 
@@ -1498,6 +1525,7 @@ function MacAudioInputsPanel({
   const [captureChCount, setCaptureChCount] = useState(2)
   const [gainByIndex, setGainByIndex] = useState<Record<string, number>>({})
   const [channelCountAuto, setChannelCountAuto] = useState(true)
+  const [audioDebug, setAudioDebug] = useState<AudioDebugResponse | null>(null)
   const compactBtnStyle: CSSProperties = {
     padding: '6px 10px',
     minHeight: 30,
@@ -1538,6 +1566,24 @@ function MacAudioInputsPanel({
     }
     setGainByIndex(gi)
   }, [data])
+
+  useEffect(() => {
+    let cancelled = false
+    const loadDebug = async () => {
+      try {
+        const j = await api<AudioDebugResponse>('/api/audio-debug', { token })
+        if (!cancelled) setAudioDebug(j)
+      } catch {
+        if (!cancelled) setAudioDebug(null)
+      }
+    }
+    void loadDebug()
+    const t = setInterval(loadDebug, 1000)
+    return () => {
+      cancelled = true
+      clearInterval(t)
+    }
+  }, [token])
 
   const load = useCallback(
     async (refreshList = false, probeAllDevices = false, dshowListOptions = false) => {
@@ -1874,6 +1920,64 @@ function MacAudioInputsPanel({
             : ''}
           ). O mix usa tons de teste ou define <code>INEAR_CAPTURE_CMD</code>.
         </p>
+      ) : null}
+      {audioDebug ? (
+        <div
+          style={{
+            marginTop: 14,
+            padding: 14,
+            borderRadius: 10,
+            border: '1px solid #334861',
+            background: '#101926',
+            color: '#dbe6f3',
+            maxWidth: 920,
+            display: 'grid',
+            gap: 6,
+          }}
+        >
+          <strong>Diagnóstico de captura e envio</strong>
+          <div style={{ fontSize: 13, color: '#9ab8d8' }}>
+            Fonte: {audioDebug.captureSource || 'none'} · modo {audioDebug.captureMode || 'n/a'} ·
+            dispositivo {audioDebug.captureDeviceName || 'n/a'}
+          </div>
+          <div style={{ fontSize: 13, color: '#9ab8d8' }}>
+            PCM: {audioDebug.receiving ? 'recebendo' : 'sem PCM'} · child{' '}
+            {audioDebug.captureChildRunning ? 'ativo' : 'parado'} · ultimo bloco{' '}
+            {audioDebug.captureLastGoodMsAgo ?? '-'} ms atras · underruns{' '}
+            {audioDebug.captureUnderruns}
+          </div>
+          <div style={{ fontSize: 13, color: '#9ab8d8' }}>
+            Envio: UDP {audioDebug.udpTargetCount} alvo(s), ultimo envio{' '}
+            {audioDebug.lastUdpSendMsAgo ?? '-'} ms atras · WS {audioDebug.wsClientCount}, ultimo
+            envio {audioDebug.lastWsSendMsAgo ?? '-'} ms atras
+          </div>
+          <div style={{ fontSize: 13, color: '#9ab8d8' }}>
+            ffmpeg: <code>{audioDebug.ffmpegPath || 'nao encontrado'}</code>
+          </div>
+          {audioDebug.captureLastError ? (
+            <div style={{ fontSize: 13, color: '#f0883e' }}>
+              Ultimo erro: {audioDebug.captureLastError}
+            </div>
+          ) : null}
+          {audioDebug.captureStderrTail?.length ? (
+            <pre
+              style={{
+                margin: 0,
+                padding: 10,
+                borderRadius: 8,
+                background: '#0d1117',
+                border: '1px solid #30363d',
+                color: '#c9d1d9',
+                fontSize: 12,
+                lineHeight: 1.45,
+                overflowX: 'auto',
+                whiteSpace: 'pre-wrap',
+              }}
+            >
+              {audioDebug.captureStderrTail.join('\n')}
+            </pre>
+          ) : null}
+        </div>
       ) : null}
       {data.devices.length === 0 && data.platform === 'darwin' ? (
         <p style={{ color: '#f28b82', marginTop: 8 }}>
