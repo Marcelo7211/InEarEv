@@ -93,6 +93,14 @@ export type NetworkQualityUi = {
   rttMs: number | null
   jitterMs?: number | null
   gapsPerMinute?: number
+  estimatedE2eMs?: number | null
+  estimatedE2eP95Ms?: number | null
+  aheadP95Ms?: number | null
+  queueDepthP95?: number | null
+  sampleCount?: number
+  slaBreaches?: number
+  slaUnder1s?: boolean
+  recommendations?: string[]
   hint?: string
 }
 

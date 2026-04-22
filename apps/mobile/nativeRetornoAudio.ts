@@ -3,7 +3,7 @@ import { NativeEventEmitter, NativeModules, Platform } from 'react-native'
 export type NativeRetornoStats = {
   connected: boolean
   playing: boolean
-  profile: 'low' | 'stable'
+  profile: 'pro' | 'low' | 'stable' | 'wifi24'
   sampleRateHz: number
   bufferFrames: number
   queuedFrames: number
@@ -15,10 +15,10 @@ export type NativeRetornoStats = {
 }
 
 type NativeRetornoModuleShape = {
-  start(wsUrl: string, latencyProfile: 'low' | 'stable'): Promise<void>
+  start(wsUrl: string, latencyProfile: 'pro' | 'low' | 'stable' | 'wifi24'): Promise<void>
   stop(): Promise<void>
   setMasterGain(gain: number): void
-  setLatencyProfile(profile: 'low' | 'stable'): void
+  setLatencyProfile(profile: 'pro' | 'low' | 'stable' | 'wifi24'): void
   getCurrentStats(): Promise<NativeRetornoStats>
 }
 
@@ -28,7 +28,7 @@ export const nativeRetornoAudio = {
   isAvailable(): boolean {
     return Platform.OS !== 'web' && Boolean(nativeModule)
   },
-  async start(wsUrl: string, latencyProfile: 'low' | 'stable') {
+  async start(wsUrl: string, latencyProfile: 'pro' | 'low' | 'stable' | 'wifi24') {
     if (!nativeModule) return
     await nativeModule.start(wsUrl, latencyProfile)
   },
@@ -39,7 +39,7 @@ export const nativeRetornoAudio = {
   setMasterGain(gain: number) {
     nativeModule?.setMasterGain(gain)
   },
-  setLatencyProfile(profile: 'low' | 'stable') {
+  setLatencyProfile(profile: 'pro' | 'low' | 'stable' | 'wifi24') {
     nativeModule?.setLatencyProfile(profile)
   },
   async getCurrentStats(): Promise<NativeRetornoStats | null> {

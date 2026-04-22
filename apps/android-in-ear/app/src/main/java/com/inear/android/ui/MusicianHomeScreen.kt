@@ -89,6 +89,7 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
     val lat by vm.latencyProfile.collectAsState()
     var master by remember { mutableFloatStateOf(1f) }
     var playing by remember { mutableStateOf(false) }
+    var previousLatencyKey by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(playing) {
         while (true) {
@@ -147,9 +148,46 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
             modifier = Modifier.fillMaxSize().padding(pad).padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            val estimatedLatencyMs = stats.estimatedLatencyMs
+            val latencyUserLabel =
+                when {
+                    !playing || !stats.connected -> "Aguardando"
+                    estimatedLatencyMs <= 60 -> "Quase em tempo real"
+                    estimatedLatencyMs <= 120 -> "Muito rapido"
+                    estimatedLatencyMs <= 220 -> "Bom para palco"
+                    estimatedLatencyMs < 1000 -> "Perceptivel, mas ainda usavel"
+                    else -> "Atraso alto"
+                }
+            val transportUserLabel =
+                when (stats.transport) {
+                    "udp" -> "UDP dedicado"
+                    "ws" -> "Fallback WebSocket"
+                    "starting" -> "Conectando"
+                    "error" -> "Erro"
+                    else -> "Parado"
+                }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DeskPillButton(label = "Latência baixa", active = lat == "low", onClick = { vm.latencyProfile.value = "low" })
-                DeskPillButton(label = "Latência estável", active = lat == "stable", onClick = { vm.latencyProfile.value = "stable" })
+                DeskPillButton(
+                    label = "Pro (~40 ms)",
+                    active = lat == "pro",
+                    onClick = { vm.latencyProfile.value = "pro" },
+                )
+                DeskPillButton(
+                    label = "2.4 GHz",
+                    active = lat == "wifi24",
+                    onClick = { vm.latencyProfile.value = "wifi24" },
+                )
+                DeskPillButton(label = "Baixa", active = lat == "low", onClick = { vm.latencyProfile.value = "low" })
+                DeskPillButton(label = "Estável", active = lat == "stable", onClick = { vm.latencyProfile.value = "stable" })
+            }
+            LaunchedEffect(lat) {
+                val prev = previousLatencyKey
+                previousLatencyKey = lat
+                if (prev != null && prev != lat && playing) {
+                    vm.stopRetorno()
+                    delay(60)
+                    vm.startRetorno()
+                }
             }
             Row(
                 Modifier.fillMaxWidth(),
@@ -174,6 +212,40 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
             }
             if (stats.lastError != null) {
                 Text("Erro: ${stats.lastError}", color = MaterialTheme.colorScheme.error)
+            }
+            Card(shape = RoundedCornerShape(10.dp)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(CardBg)
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    Text(
+                        "Status do retorno",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = Color(0xFFe8eaed),
+                    )
+                    Text(
+                        "Atraso estimado: ${stats.estimatedLatencyMs} ms · $latencyUserLabel",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color(0xFFdbe6f3),
+                    )
+                    Text(
+                        "Transporte: $transportUserLabel · fila app ${stats.queuedAudioMs} ms · fila audio ${stats.halQueuedMs} ms",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF9ab8d8),
+                    )
+                    Text(
+                        if (inputLevels?.receiving == true) {
+                            "Sinal do desktop: recebendo audio"
+                        } else {
+                            "Sinal do desktop: sem audio recebido agora"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (inputLevels?.receiving == true) Color(0xFF81c995) else Color(0xFFf0883e),
+                    )
+                }
             }
             MasterDeskControl(value = master, onSet = { master = it; vm.setMasterGain(it) })
 

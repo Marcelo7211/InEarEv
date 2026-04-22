@@ -47,7 +47,7 @@ class InEarViewModel(application: Application) : AndroidViewModel(application) {
     private val _audioInputLevels = MutableStateFlow<AudioInputLevelsResponse?>(null)
     val audioInputLevels: StateFlow<AudioInputLevelsResponse?> = _audioInputLevels.asStateFlow()
 
-    val latencyProfile = MutableStateFlow("low")
+    val latencyProfile = MutableStateFlow("pro")
 
     init {
         viewModelScope.launch {
@@ -182,7 +182,12 @@ class InEarViewModel(application: Application) : AndroidViewModel(application) {
         val s = _session.value
         val m = selfMusician() ?: return
         if (s.token.isEmpty()) return
-        audioEngine.start(s.apiBase, s.token, latencyProfile.value)
+        val picked = latencyProfile.value
+        val net = _showfile.value?.networkProfile.orEmpty()
+        /* Em 2,4 GHz o perfil "pro" é demasiado apertado para o jitter típico — usa wifi24. */
+        val effective =
+            if (net == "wifi_2_4" && picked == "pro") "wifi24" else picked
+        audioEngine.start(s.apiBase, s.token, effective)
     }
 
     fun stopRetorno() {

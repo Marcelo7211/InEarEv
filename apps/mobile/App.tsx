@@ -397,7 +397,7 @@ export default function App() {
   const [webErr, setWebErr] = useState<string | null>(null)
   const [retornoOpen, setRetornoOpen] = useState(false)
   const [retornoLatency, setRetornoLatency] =
-    useState<StreamRetornoLatency>('low')
+    useState<StreamRetornoLatency>('pro')
   const [pcAudioStatus, setPcAudioStatus] = useState<PcAudioStatus | null>(null)
   const [audioDevices, setAudioDevices] = useState<AudioCaptureDevicesRes | null>(null)
   const [audioInputLevels, setAudioInputLevels] = useState<AudioInputLevelsRes | null>(
@@ -416,6 +416,20 @@ export default function App() {
     const sub = parseJwtSub(session.token)
     return retornoShowfile.musicians.find((m) => m.username === sub) ?? null
   }, [retornoShowfile, session])
+
+  useEffect(() => {
+    if (nativeRetornoAudio.isAvailable()) return
+    if (
+      retornoShowfile?.networkProfile === 'wifi_2_4' &&
+      (retornoLatency === 'pro' || retornoLatency === 'low')
+    ) {
+      setRetornoLatency('wifi24')
+      return
+    }
+    if (retornoShowfile?.networkProfile === 'wifi_5' && retornoLatency === 'wifi24') {
+      setRetornoLatency('pro')
+    }
+  }, [retornoShowfile?.networkProfile, retornoLatency])
 
   const retornoInterfaceIfCount = useMemo(() => {
     if (!retornoShowfile) return 0
@@ -461,9 +475,7 @@ export default function App() {
     void refetchRetornoShowfile()
   }, [refetchRetornoShowfile])
 
-  const effectiveRetornoLatency: StreamRetornoLatency = nativeRetornoAudio.isAvailable()
-    ? 'low'
-    : retornoLatency
+  const effectiveRetornoLatency: StreamRetornoLatency = retornoLatency
 
   const streamWsUrl = useMemo(() => {
     if (!session || session.role !== 'musician') return null
@@ -764,8 +776,11 @@ export default function App() {
               nestedScrollEnabled
             >
               <View style={styles.retornoLatencyRow}>
-                <Button title="Latência: baixa" onPress={() => setRetornoLatency('low')} />
-                <Button title="Latência: estável" onPress={() => setRetornoLatency('stable')} />
+                <Button title="Latência: palco PRO" onPress={() => setRetornoLatency('pro')} />
+                <Button
+                  title="Latência: 2.4 otimizada"
+                  onPress={() => setRetornoLatency('wifi24')}
+                />
               </View>
               <Text style={styles.retornoLatencyHint}>
                 Buffer Web: {retornoLatency} (toca &quot;Iniciar&quot; outra vez se mudares).
@@ -927,17 +942,17 @@ export default function App() {
               <Pressable
                 style={[
                   styles.latencyPill,
-                  retornoLatency === 'stable' && styles.latencyPillActive,
+                  retornoLatency === 'wifi24' && styles.latencyPillActive,
                 ]}
-                onPress={() => setRetornoLatency('stable')}
+                onPress={() => setRetornoLatency('wifi24')}
               >
-                <Text style={styles.latencyPillTxt}>2.4 - (alta)</Text>
+                <Text style={styles.latencyPillTxt}>2.4 - otimizada</Text>
               </Pressable>
               <Pressable
-                style={[styles.latencyPill, retornoLatency === 'low' && styles.latencyPillActive]}
-                onPress={() => setRetornoLatency('low')}
+                style={[styles.latencyPill, retornoLatency === 'pro' && styles.latencyPillActive]}
+                onPress={() => setRetornoLatency('pro')}
               >
-                <Text style={styles.latencyPillTxt}>5 - (baixa)</Text>
+                <Text style={styles.latencyPillTxt}>5 - palco PRO</Text>
               </Pressable>
             </View>
             {streamWsUrl && nativeRetornoAudio.isAvailable() ? (
@@ -1036,8 +1051,8 @@ export default function App() {
             nestedScrollEnabled
           >
             <View style={styles.retornoLatencyRow}>
-              <Button title="5 - (baixa)" onPress={() => setRetornoLatency('low')} />
-              <Button title="2.4 - (alta)" onPress={() => setRetornoLatency('stable')} />
+              <Button title="5 - palco PRO" onPress={() => setRetornoLatency('pro')} />
+              <Button title="2.4 - otimizada" onPress={() => setRetornoLatency('wifi24')} />
             </View>
             {session ? (
               <RetornoMixerControls

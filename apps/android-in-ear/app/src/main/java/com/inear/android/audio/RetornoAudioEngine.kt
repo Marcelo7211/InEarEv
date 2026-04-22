@@ -22,10 +22,17 @@ import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
+import org.json.JSONObject
 import com.inear.android.net.InEarRepository
 
 private const val UDP_CONTROL_PORT = 9877
 private const val SAMPLE_RATE = 48_000
+
+/** Margem acima do tecto configurado do sink antes de drenar (só RAM + eventual flush). */
+private const val CATCHUP_ABOVE_QUEUE_HEADROOM_MS = 36
+
+/** Nunca deixar o «PCM recebido à frente do relógio» ultrapassar isto (ms), qualquer que seja o perfil. */
+private const val PLAYOUT_BACKLOG_ABSOLUTE_MAX_MS = 420.0
 
 data class RetornoStats(
     val transport: String = "off",
@@ -35,11 +42,18 @@ data class RetornoStats(
     val framesReceived: Long = 0,
     val sequenceGaps: Int = 0,
     val queuedFrames: Int = 0,
+    val queuedAudioMs: Int = 0,
+    val halQueuedMs: Int = 0,
+    val estimatedLatencyMs: Int = 0,
 )
 
 /**
  * Retorno só por PCM INE1 (UDP → WebSocket). WebRTC foi removido do arranque: em LAN o RTP
  * competia com o PCM e gerava chiado; o caminho estável é o mesmo wireframe do servidor.
+ *
+ * **Rede interna / LAN:** prefere sempre **UDP** (controlo :9877, PCM :9876) — o cliente tenta-o
+ * primeiro; evita filas gigantes de TCP no WebSocket. Garante firewall/router a permitir UDP
+ * entre o telemóvel e o host do servidor.
  */
 class RetornoAudioEngine(
     @Suppress("UNUSED_PARAMETER") private val appContext: android.content.Context,
@@ -66,10 +80,38 @@ class RetornoAudioEngine(
     @Volatile
     private var lastSeq: Int? = null
 
+    /**
+     * Início da janela «PCM recebido vs tempo real» (bursts TCP / WS).
+     * Usa [System.nanoTime] para não subestimar o atraso quando muitos frames chegam no mesmo ms.
+     */
+    private var playoutSessionStartNs: Long = 0L
+
+    private var totalReceivedMediaMs: Double = 0.0
+
+    /** Se (PCM acumulado − tempo real) > isto, drena playout (ms). */
+    private var playoutCatchupBacklogMs: Double = 200.0
+
+    /** Perfil passado a [start] — usado para limiar da fila HAL (TCP 2,4 GHz). */
+    private var retornoLatencyProfile: String = "stable"
+
+    private fun resetPlayoutDebt() {
+        playoutSessionStartNs = 0L
+        totalReceivedMediaMs = 0.0
+    }
+
     fun start(apiBase: String, token: String, latency: String) {
         job?.cancel()
         job = scope.launch(Dispatchers.IO) {
             stopInternal()
+            retornoLatencyProfile = latency
+            playoutCatchupBacklogMs =
+                when (latency) {
+                    "pro" -> 150.0
+                    "low" -> 170.0
+                    "wifi24" -> 115.0
+                    else -> 380.0
+                }
+            resetPlayoutDebt()
             running = true
             lastSeq = null
             _stats.value = RetornoStats(transport = "starting", connected = false, playing = false)
@@ -109,6 +151,7 @@ class RetornoAudioEngine(
         }
         ws = null
         sink.stop()
+        resetPlayoutDebt()
         _stats.value = RetornoStats()
     }
 
@@ -140,6 +183,9 @@ class RetornoAudioEngine(
                         playing = true,
                         lastError = null,
                         queuedFrames = sink.queuedFrames(),
+                        queuedAudioMs = sink.queuedAudioMsApprox(),
+                        halQueuedMs = sink.halQueuedMsApprox(),
+                        estimatedLatencyMs = sink.queuedAudioMsApprox() + sink.halQueuedMsApprox(),
                     )
                     val rcv = socket
                     recvThread = thread(name = "inear-udp") {
@@ -183,7 +229,12 @@ class RetornoAudioEngine(
             -1 -> 3847
             else -> u.port
         }
-        val lat = if (latency == "low") "low" else "stable"
+        val lat = when (latency) {
+            "pro" -> "pro"
+            "low" -> "low"
+            "wifi24" -> "wifi24"
+            else -> "stable"
+        }
         val wsUrl =
             "$wsScheme://${u.host}:$port/api/stream/audio?token=" +
                 java.net.URLEncoder.encode(token, Charsets.UTF_8.name()) +
@@ -207,10 +258,31 @@ class RetornoAudioEngine(
                         playing = true,
                         lastError = null,
                         queuedFrames = sink.queuedFrames(),
+                        queuedAudioMs = sink.queuedAudioMsApprox(),
+                        halQueuedMs = sink.halQueuedMsApprox(),
+                        estimatedLatencyMs = sink.queuedAudioMsApprox() + sink.halQueuedMsApprox(),
                     )
                 }
 
-                override fun onMessage(webSocket: WebSocket, text: String) {}
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    if (!running) return
+                    try {
+                        val j = JSONObject(text)
+                        if (j.optString("t") != "hello") return
+                        val hz = j.optInt("sampleRateHz", SAMPLE_RATE)
+                        val bs = j.optInt("blockSamples", 0)
+                        if (hz > 0 && hz != SAMPLE_RATE) {
+                            android.util.Log.d(
+                                "inear-retorno",
+                                "hello sampleRateHz=$hz (client assume $SAMPLE_RATE)",
+                            )
+                        }
+                        if (bs > 0) {
+                            android.util.Log.d("inear-retorno", "hello blockSamples=$bs")
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
 
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                     if (!running) return
@@ -247,11 +319,49 @@ class RetornoAudioEngine(
                 gapAdd = (frame.sequence - prev - 1).coerceIn(0, 10_000)
             }
         }
+
+        if (playoutSessionStartNs == 0L) {
+            playoutSessionStartNs = System.nanoTime()
+            totalReceivedMediaMs = 0.0
+        }
+        val frameMs = frame.samplesPerChannel * 1000.0 / SAMPLE_RATE
+        totalReceivedMediaMs += frameMs
+        val wallMs = (System.nanoTime() - playoutSessionStartNs) / 1_000_000.0
+        val backlogMs = totalReceivedMediaMs - wallMs
+        if (backlogMs > playoutCatchupBacklogMs || backlogMs > PLAYOUT_BACKLOG_ABSOLUTE_MAX_MS) {
+            sink.drainPlayoutBuffer()
+            resetPlayoutDebt()
+        }
+
+        val cap = sink.maxConfiguredPlayoutQueueMs()
+        if (sink.queuedAudioMsApprox() > cap + CATCHUP_ABOVE_QUEUE_HEADROOM_MS) {
+            sink.drainPlayoutBuffer()
+            resetPlayoutDebt()
+        }
+
+        /* Fila no AudioTrack (HAL): com WS a taxa média pode parecer «em dia» mas o DSP leva segundos. */
+        val halCapMs =
+            when (retornoLatencyProfile) {
+                "pro", "low" -> 130
+                "wifi24" -> 95
+                else -> 220
+            }
+        if (totalReceivedMediaMs > 50.0 && sink.halQueuedMsApprox() > halCapMs) {
+            sink.drainPlayoutBuffer()
+            resetPlayoutDebt()
+        }
+
         sink.writeInterleavedS16(frame.pcmInterleavedS16, frame.pcmInterleavedS16.size)
+
         _stats.update { s ->
+            val queuedAudioMs = sink.queuedAudioMsApprox()
+            val halQueuedMs = sink.halQueuedMsApprox()
             s.copy(
                 framesReceived = s.framesReceived + 1,
                 queuedFrames = sink.queuedFrames(),
+                queuedAudioMs = queuedAudioMs,
+                halQueuedMs = halQueuedMs,
+                estimatedLatencyMs = queuedAudioMs + halQueuedMs,
                 sequenceGaps = if (gapAdd > 0) s.sequenceGaps + gapAdd else s.sequenceGaps,
             )
         }

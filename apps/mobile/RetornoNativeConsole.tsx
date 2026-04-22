@@ -6,7 +6,7 @@ import { type NativeRetornoStats, nativeRetornoAudio } from './nativeRetornoAudi
 
 type Props = {
   wsUrl: string | null
-  latencyProfile: 'low' | 'stable'
+  latencyProfile: 'pro' | 'low' | 'stable' | 'wifi24'
   masterGain: number
   onMasterGainChange: (value: number) => void
 }
@@ -119,7 +119,15 @@ export function RetornoNativeConsole({
       <View style={s.statsGrid}>
         <View style={s.statCell}>
           <Text style={s.statLabel}>Perfil</Text>
-          <Text style={s.statValue}>{stats.profile === 'low' ? '5 GHz' : '2.4 GHz'}</Text>
+          <Text style={s.statValue}>
+            {stats.profile === 'pro'
+              ? '5 GHz PRO'
+              : stats.profile === 'low'
+                ? '5 GHz'
+                : stats.profile === 'wifi24'
+                  ? '2.4 GHz'
+                  : 'estavel'}
+          </Text>
         </View>
         <View style={s.statCell}>
           <Text style={s.statLabel}>Buffer</Text>

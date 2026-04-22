@@ -1462,7 +1462,7 @@ function createServices(app) {
     ffmpegHasDshowInDevices: /** @type {boolean | null} */ (null),
     at: 0,
   }
-  /** @type {Map<string, { lastReportSeqGaps: number | null, samples: Array<{ t: number, rtt: number, gapsDelta: number }> }>} */
+  /** @type {Map<string, { lastReportSeqGaps: number | null, samples: Array<{ t: number, rtt: number, gapsDelta: number, aheadMs: number, estimatedE2eMs: number, queueDepth: number, drops: number, underruns: number, slaOver1s: number, latencyProfile: string }> }>} */
   const telemetryBySub = new Map()
   /** @type {Map<string, { address: string, port: number }>} */
   const udpTargets = new Map()
@@ -1539,14 +1539,59 @@ function createServices(app) {
     return clampAudioBlockSamples(state.audioBlockSamples)
   }
 
-  function networkHint(level, avgRtt, gapsPm) {
+  function avgSample(values) {
+    if (!values || values.length === 0) return 0
+    return values.reduce((a, b) => a + b, 0) / values.length
+  }
+
+  function percentile(values, p) {
+    if (!values || values.length === 0) return 0
+    const sorted = values
+      .filter((v) => typeof v === 'number' && Number.isFinite(v))
+      .slice()
+      .sort((a, b) => a - b)
+    if (sorted.length === 0) return 0
+    const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1))
+    return sorted[idx]
+  }
+
+  function buildWifi24Recommendations(summary) {
+    const items = [
+      'Fixe o access point de 2,4 GHz em 20 MHz e use apenas canais 1, 6 ou 11.',
+      'Ative WMM/QoS com prioridade de voz para o SSID do palco e ligue o servidor por Ethernet ao AP.',
+    ]
+    if (summary.avgRtt > 45 || summary.jitterMs > 18) {
+      items.push(
+        'Há indício de interferência: afaste o AP de Bluetooth, micro-ondas, iluminação sem fio e receptores IEM.',
+      )
+    }
+    if (summary.queueDepthP95 >= 10 || summary.e2eP95Ms > 700) {
+      items.push(
+        'Reduza clientes concorrentes no SSID de palco, desative power save agressivo no telemóvel e mantenha visada para o AP.',
+      )
+    }
+    if (summary.slaBreaches > 0 || summary.gapsPerMinute > 8) {
+      items.push(
+        'Se o AP suportar, reserve SSID dedicado para retorno e marque o tráfego de áudio como DSCP EF/46.',
+      )
+    }
+    return items.slice(0, 4)
+  }
+
+  function networkHint(level, _avgRtt, gapsPm, e2eP95Ms, slaBreaches) {
     if (level === 'bad') {
+      if (slaBreaches > 0 || e2eP95Ms > 1000) {
+        return 'Meta de < 1000 ms violada — reduza carga no SSID 2,4 GHz, use QoS/WMM e fixe canal 1, 6 ou 11.'
+      }
       if (gapsPm > 8) {
         return 'Muitos saltos de pacotes — prefira Wi‑Fi 5 GHz, router dedicado ao palco e servidor com Ethernet ao AP.'
       }
       return 'Latência de rede alta — aproxime o telemóvel do router, evite VPN e redes públicas.'
     }
     if (level === 'warn') {
+      if (e2eP95Ms > 650) {
+        return 'Ligação utilizável, mas perto do limite operacional — ajuste canal, QoS e mantenha 20 MHz em 2,4 GHz.'
+      }
       return 'Ligação utilizável — se ouvir cortes, use 5 GHz ou aproxime-se do access point.'
     }
     return 'Ligação estável para retorno.'
@@ -1559,6 +1604,21 @@ function createServices(app) {
         rttMs: null,
         jitterMs: null,
         gapsPerMinute: 0,
+        estimatedE2eMs: null,
+        estimatedE2eP95Ms: null,
+        aheadP95Ms: null,
+        queueDepthP95: null,
+        sampleCount: 0,
+        slaBreaches: 0,
+        slaUnder1s: false,
+        recommendations: buildWifi24Recommendations({
+          avgRtt: 0,
+          jitterMs: 0,
+          gapsPerMinute: 0,
+          e2eP95Ms: 0,
+          queueDepthP95: 0,
+          slaBreaches: 0,
+        }),
         hint: 'Sem telemetria ainda — inicie o retorno (WebSocket) no telemóvel.',
       }
     }
@@ -1571,6 +1631,21 @@ function createServices(app) {
         rttMs: null,
         jitterMs: null,
         gapsPerMinute: 0,
+        estimatedE2eMs: null,
+        estimatedE2eP95Ms: null,
+        aheadP95Ms: null,
+        queueDepthP95: null,
+        sampleCount: 0,
+        slaBreaches: 0,
+        slaUnder1s: false,
+        recommendations: buildWifi24Recommendations({
+          avgRtt: 0,
+          jitterMs: 0,
+          gapsPerMinute: 0,
+          e2eP95Ms: 0,
+          queueDepthP95: 0,
+          slaBreaches: 0,
+        }),
         hint: 'Dados de rede desatualizados — confirme que o retorno está ativo.',
       }
     }
@@ -1584,18 +1659,48 @@ function createServices(app) {
         ? rtts.reduce((acc, r) => acc + (r - mean) ** 2, 0) / rtts.length
         : 0
     const jitter = Math.sqrt(variance)
+    const aheads = recent
+      .map((s) => s.aheadMs)
+      .filter((v) => typeof v === 'number' && v >= 0 && v < 5000)
+    const e2es = recent
+      .map((s) => s.estimatedE2eMs)
+      .filter((v) => typeof v === 'number' && v >= 0 && v < 10000)
+    const queueDepths = recent
+      .map((s) => s.queueDepth)
+      .filter((v) => typeof v === 'number' && v >= 0 && v < 200)
     const gapSum = recent.reduce((a, s) => a + (s.gapsDelta || 0), 0)
+    const slaBreaches = recent.reduce((a, s) => a + (s.slaOver1s || 0), 0)
     const spanMin = Math.max(0.25, (now - recent[0].t) / 60000)
     const gapsPerMinute = gapSum / spanMin
+    const e2eAvg = avgSample(e2es)
+    const e2eP95 = percentile(e2es, 95)
+    const aheadP95 = percentile(aheads, 95)
+    const queueDepthP95 = percentile(queueDepths, 95)
     let level = 'good'
-    if (avgRtt > 85 || gapsPerMinute > 18) level = 'bad'
-    else if (avgRtt > 38 || gapsPerMinute > 5) level = 'warn'
+    if (avgRtt > 85 || gapsPerMinute > 18 || e2eP95 > 1000 || slaBreaches > 0) level = 'bad'
+    else if (avgRtt > 38 || gapsPerMinute > 5 || e2eP95 > 650 || jitter > 25) level = 'warn'
+    const summary = {
+      avgRtt,
+      jitterMs: jitter,
+      gapsPerMinute,
+      e2eP95Ms: e2eP95,
+      queueDepthP95,
+      slaBreaches,
+    }
     return {
       level,
       rttMs: Math.round(avgRtt * 10) / 10,
       jitterMs: Math.round(jitter * 10) / 10,
       gapsPerMinute: Math.round(gapsPerMinute * 10) / 10,
-      hint: networkHint(level, avgRtt, gapsPerMinute),
+      estimatedE2eMs: Math.round(e2eAvg * 10) / 10,
+      estimatedE2eP95Ms: Math.round(e2eP95 * 10) / 10,
+      aheadP95Ms: Math.round(aheadP95 * 10) / 10,
+      queueDepthP95: Math.round(queueDepthP95 * 10) / 10,
+      sampleCount: recent.length,
+      slaBreaches,
+      slaUnder1s: e2eP95 > 0 && e2eP95 < 1000 && slaBreaches === 0,
+      recommendations: buildWifi24Recommendations(summary),
+      hint: networkHint(level, avgRtt, gapsPerMinute, e2eP95, slaBreaches),
     }
   }
   function muteFadeSamples() {
@@ -3044,6 +3149,34 @@ function createServices(app) {
       typeof b.sequenceGaps === 'number' && Number.isFinite(b.sequenceGaps)
         ? Math.max(0, Math.floor(b.sequenceGaps))
         : 0
+    const aheadMs =
+      typeof b.aheadMs === 'number' && Number.isFinite(b.aheadMs)
+        ? Math.max(0, Math.min(5000, b.aheadMs))
+        : 0
+    const estimatedE2eMs =
+      typeof b.estimatedE2eMs === 'number' && Number.isFinite(b.estimatedE2eMs)
+        ? Math.max(0, Math.min(10000, b.estimatedE2eMs))
+        : 0
+    const queueDepth =
+      typeof b.queueDepth === 'number' && Number.isFinite(b.queueDepth)
+        ? Math.max(0, Math.min(200, Math.round(b.queueDepth)))
+        : 0
+    const drops =
+      typeof b.drops === 'number' && Number.isFinite(b.drops)
+        ? Math.max(0, Math.floor(b.drops))
+        : 0
+    const underruns =
+      typeof b.underruns === 'number' && Number.isFinite(b.underruns)
+        ? Math.max(0, Math.floor(b.underruns))
+        : 0
+    const slaOver1s =
+      typeof b.slaOver1s === 'number' && Number.isFinite(b.slaOver1s)
+        ? Math.max(0, Math.floor(b.slaOver1s))
+        : 0
+    const latencyProfile =
+      typeof b.latencyProfile === 'string' && b.latencyProfile
+        ? String(b.latencyProfile).slice(0, 24)
+        : 'unknown'
     const prev = telemetryBySub.get(sub) || {
       lastReportSeqGaps: /** @type {number | null} */ (null),
       samples: [],
@@ -3057,13 +3190,28 @@ function createServices(app) {
       t: Date.now(),
       rtt,
       gapsDelta,
+      aheadMs,
+      estimatedE2eMs,
+      queueDepth,
+      drops,
+      underruns,
+      slaOver1s,
+      latencyProfile,
     })
     if (prev.samples.length > 40) {
       prev.samples.splice(0, prev.samples.length - 40)
     }
     telemetryBySub.set(sub, prev)
-    if (rtt > 200 || gapsDelta > 2) {
-      console.info('[telemetry]', sub, { rttMs: rtt, gapsDelta, sequenceGaps: seqGaps })
+    if (rtt > 200 || gapsDelta > 2 || estimatedE2eMs > 1000) {
+      console.info('[telemetry]', sub, {
+        rttMs: rtt,
+        gapsDelta,
+        sequenceGaps: seqGaps,
+        estimatedE2eMs,
+        aheadMs,
+        queueDepth,
+        latencyProfile,
+      })
     }
     res.json({ ok: true })
   })
@@ -3104,6 +3252,14 @@ function createServices(app) {
   })
 
   const httpServer = http.createServer(ex)
+  httpServer.on('connection', (socket) => {
+    try {
+      socket.setNoDelay(true)
+      socket.setKeepAlive(true, 15000)
+    } catch {
+      /* ignore */
+    }
+  })
   const { WebSocketServer } = require('ws')
   const wss = new WebSocketServer({
     noServer: true,
@@ -3172,10 +3328,32 @@ function createServices(app) {
     })
   }
   function normalizeLatencyProfile(input) {
-    return input === 'low' ? 'low' : 'stable'
+    if (input === 'pro' || input === 'low' || input === 'wifi24') return input
+    return 'stable'
   }
+  function preferredWireCodecForProfile(profile) {
+    if (profile === 'wifi24') return 'mulaw_u8'
+    if (profile === 'pro') return 'pcm_s16'
+    return 'pcm_s16'
+  }
+  function wireCodecForSocket(profile, bufferedAmount, pcmWireBytes) {
+    if (profile === 'wifi24') return 'mulaw_u8'
+    if (profile === 'pro') {
+      return bufferedAmount > pcmWireBytes * 0.2 ? 'mulaw_u8' : 'pcm_s16'
+    }
+    if (profile === 'low') {
+      return bufferedAmount > pcmWireBytes * 0.65 ? 'mulaw_u8' : 'pcm_s16'
+    }
+    return bufferedAmount > pcmWireBytes * 2 ? 'mulaw_u8' : 'pcm_s16'
+  }
+  /** Limiar `bufferedAmount` antes de saltar um tick (evita fila TCP gigante no cliente). */
   function wsBufferedFactorForProfile(profile) {
-    return profile === 'low' ? 3 : 10
+    /* `pro`: palco 5 GHz, não tolera backlog. `wifi24`: menos fila TCP em 2,4 GHz (LAN interna pode usar UDP em vez disto).
+     * `stable`: mais backpressure no Node se o socket enche. */
+    if (profile === 'pro') return 0.35
+    if (profile === 'low') return 0.75
+    if (profile === 'wifi24') return 0.5
+    return 8
   }
 
   httpServer.on('upgrade', (request, socket, head) => {
@@ -3219,6 +3397,12 @@ function createServices(app) {
         return
       }
       wss.handleUpgrade(request, socket, head, (ws) => {
+        try {
+          socket.setNoDelay(true)
+          socket.setKeepAlive(true, 15000)
+        } catch {
+          /* ignore */
+        }
         const mid = strip.id
         let set = wsAudioByMusician.get(mid)
         if (!set) {
@@ -3242,6 +3426,10 @@ function createServices(app) {
               sampleRateHz: MVP_SAMPLE_RATE_HZ,
               blockSamples: audioBlockSamples(),
               latencyProfile,
+              wireCodec:
+                latencyProfile === 'pro'
+                  ? 'adaptive-pcm16-mulaw'
+                  : preferredWireCodecForProfile(latencyProfile),
             }),
           )
         } catch {
@@ -3366,15 +3554,18 @@ function createServices(app) {
           Math.min(32767, Math.round(r * gOut)),
         )
       }
-      const buf = encodeStereoPcmFrame({
-        sequence: audioSeq,
-        serverTimestampNs: ts,
-        pcmInterleavedS16: interleaved,
-      })
-      const wire = Buffer.from(buf)
       const udpTarget = udpTargets.get(musicianId)
       if (udpTarget) {
-        audioSock.send(wire, udpTarget.port, udpTarget.address, (err) => {
+        const udpWire = Buffer.from(
+          encodeStereoPcmFrame({
+            sequence: audioSeq,
+            serverTimestampNs: ts,
+            pcmInterleavedS16: interleaved,
+            codec:
+              state.showfile.networkProfile === 'wifi_2_4' ? 'mulaw_u8' : 'pcm_s16',
+          }),
+        )
+        audioSock.send(udpWire, udpTarget.port, udpTarget.address, (err) => {
           if (err) console.warn('[udp send]', err.message)
         })
       }
@@ -3383,9 +3574,20 @@ function createServices(app) {
         for (const ws of wsSet) {
           if (ws.readyState === 1) {
             const latencyProfile = wsAudioProfileBySocket.get(ws) || 'stable'
+            const pcmWireBytes = interleaved.length * 2 + 32
+            const bufferedAmount =
+              typeof ws.bufferedAmount === 'number' ? ws.bufferedAmount : 0
+            const codec = wireCodecForSocket(latencyProfile, bufferedAmount, pcmWireBytes)
+            const wire = Buffer.from(
+              encodeStereoPcmFrame({
+                sequence: audioSeq,
+                serverTimestampNs: ts,
+                pcmInterleavedS16: interleaved,
+                codec,
+              }),
+            )
             if (
-              typeof ws.bufferedAmount === 'number' &&
-              ws.bufferedAmount > wire.length * wsBufferedFactorForProfile(latencyProfile)
+              bufferedAmount > wire.length * wsBufferedFactorForProfile(latencyProfile)
             ) {
               continue
             }

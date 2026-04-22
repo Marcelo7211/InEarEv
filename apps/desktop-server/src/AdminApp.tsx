@@ -19,6 +19,13 @@ import {
 
 type Role = 'admin' | 'musician'
 
+type AudioInputLevelsResponse = {
+  captureChannelCount: number
+  updatedAt: number
+  receiving: boolean
+  levelsByIndex: Record<string, number>
+}
+
 /** Sessão vinda da URL (Expo Go / WebView) — evita segundo login no painel web. */
 function readUrlAuth():
   | { token: string; role: Role }
@@ -66,11 +73,20 @@ export function AdminApp() {
         rttMs: number | null
         jitterMs: number | null
         gapsPerMinute: number
+        estimatedE2eMs?: number | null
+        estimatedE2eP95Ms?: number | null
+        aheadP95Ms?: number | null
+        queueDepthP95?: number | null
+        sampleCount?: number
+        slaBreaches?: number
+        slaUnder1s?: boolean
+        recommendations?: string[]
         hint: string
       }
     >
   >({})
   const [audioBlockSamples, setAudioBlockSamples] = useState<number | null>(null)
+  const [audioInputLevels, setAudioInputLevels] = useState<AudioInputLevelsResponse | null>(null)
   const [setupRequired, setSetupRequired] = useState(false)
   const [setupChecked, setSetupChecked] = useState(false)
   const [loginUser, setLoginUser] = useState('')
@@ -142,7 +158,7 @@ export function AdminApp() {
   }, [token, role, refreshShowfile])
 
   useEffect(() => {
-    if (!token || role !== 'admin') return
+    if (!token) return
     let cancelled = false
     const load = async () => {
       try {
@@ -176,7 +192,26 @@ export function AdminApp() {
       cancelled = true
       clearInterval(t)
     }
-  }, [token, role])
+  }, [token])
+
+  useEffect(() => {
+    if (!token) return
+    let cancelled = false
+    const load = async () => {
+      try {
+        const levels = await api<AudioInputLevelsResponse>('/api/audio-input-levels', { token })
+        if (!cancelled) setAudioInputLevels(levels)
+      } catch {
+        if (!cancelled) setAudioInputLevels(null)
+      }
+    }
+    void load()
+    const t = setInterval(load, 150)
+    return () => {
+      cancelled = true
+      clearInterval(t)
+    }
+  }, [token])
 
   useEffect(() => {
     if (token) return
@@ -1007,6 +1042,7 @@ export function AdminApp() {
         <ChannelTable
           token={token}
           showfile={showfile}
+          audioInputLevels={audioInputLevels}
           onSaved={refreshShowfile}
           onChannelStripPatched={mergeChannelStripIntoShowfile}
         />
@@ -1016,6 +1052,7 @@ export function AdminApp() {
         <MusicianTable
           showfile={showfile}
           token={token}
+          audioInputLevels={audioInputLevels}
           onSaved={refreshShowfile}
           onMusicianStripPatched={mergeMusicianStripIntoShowfile}
         />
@@ -1039,8 +1076,46 @@ export function AdminApp() {
             O perfil Wi‑Fi é uma referência operacional. O <strong>bloco PCM</strong> (servidor)
             define quantas amostras são processadas por tick — valores menores reduzem a
             latência do PC ao custo de mais CPU e risco de cortes. Isto é independente do
-            perfil <em>low/stable</em> do WebSocket no telemóvel (buffer do cliente).
+            perfil <em>pro/low/stable/wifi24</em> do WebSocket no telemóvel (buffer do cliente).
           </p>
+          <div
+            style={{
+              display: 'grid',
+              gap: 10,
+              marginBottom: 18,
+              maxWidth: 720,
+            }}
+          >
+            <div
+              style={{
+                border: '1px solid #30363d',
+                borderRadius: 12,
+                padding: 12,
+                background: '#0d1621',
+              }}
+            >
+              <strong style={{ color: '#e8eaed' }}>Plano 5 GHz PRO</strong>
+              <p style={{ color: '#9aa0a6', margin: '8px 0 0', fontSize: 13 }}>
+                Use SSID dedicado ao palco, WMM/QoS na classe de voz, access point com uplink
+                por Ethernet e canal 5 GHz limpo. Prefira 40 MHz em ambientes densos; use 80
+                MHz apenas se o espectro estiver realmente limpo.
+              </p>
+            </div>
+            <div
+              style={{
+                border: '1px solid #30363d',
+                borderRadius: 12,
+                padding: 12,
+                background: '#10151d',
+              }}
+            >
+              <strong style={{ color: '#e8eaed' }}>Plano 2,4 GHz</strong>
+              <p style={{ color: '#9aa0a6', margin: '8px 0 0', fontSize: 13 }}>
+                Use apenas canais 1, 6 ou 11, largura fixa de 20 MHz, WMM/QoS ativo, SSID
+                dedicado ao palco e servidor ligado por Ethernet ao access point.
+              </p>
+            </div>
+          </div>
           <h3 style={{ color: '#e8eaed', marginBottom: 8 }}>Medidor de qualidade (por músico)</h3>
           <div
           style={{
@@ -1083,13 +1158,41 @@ export function AdminApp() {
                     <span style={{ color: '#8b949e', fontSize: 13 }}>({m.username})</span>
                   </div>
                   {q ? (
-                    <p style={{ color: '#9aa0a6', margin: '8px 0 0', fontSize: 13 }}>
-                      {q.hint}
-                      {q.rttMs != null ? ` · RTT ~${q.rttMs} ms` : ''}
-                      {q.gapsPerMinute != null
-                        ? ` · ~${q.gapsPerMinute} gaps/min`
-                        : ''}
-                    </p>
+                    <>
+                      <p style={{ color: '#9aa0a6', margin: '8px 0 0', fontSize: 13 }}>
+                        {q.hint}
+                        {q.rttMs != null ? ` · RTT ~${q.rttMs} ms` : ''}
+                        {q.jitterMs != null ? ` · jitter ~${q.jitterMs} ms` : ''}
+                        {q.gapsPerMinute != null
+                          ? ` · ~${q.gapsPerMinute} gaps/min`
+                          : ''}
+                      </p>
+                      <p style={{ color: '#9aa0a6', margin: '6px 0 0', fontSize: 12 }}>
+                        SLA &lt; 1000 ms:{' '}
+                        <strong
+                          style={{ color: q.slaUnder1s ? '#39ff14' : '#f85149' }}
+                        >
+                          {q.slaUnder1s ? 'OK' : 'ATENCAO'}
+                        </strong>
+                        {q.estimatedE2eMs != null ? ` · media e2e ~${q.estimatedE2eMs} ms` : ''}
+                        {q.estimatedE2eP95Ms != null
+                          ? ` · p95 e2e ~${q.estimatedE2eP95Ms} ms`
+                          : ''}
+                        {q.aheadP95Ms != null ? ` · p95 ahead ~${q.aheadP95Ms} ms` : ''}
+                        {q.queueDepthP95 != null ? ` · fila p95 ~${q.queueDepthP95}` : ''}
+                        {q.sampleCount != null ? ` · amostras ${q.sampleCount}` : ''}
+                        {q.slaBreaches ? ` · violacoes ${q.slaBreaches}` : ''}
+                      </p>
+                      {q.recommendations && q.recommendations.length > 0 ? (
+                        <ul style={{ color: '#8b949e', margin: '8px 0 0', paddingLeft: 18 }}>
+                          {q.recommendations.map((item) => (
+                            <li key={item} style={{ marginBottom: 4 }}>
+                              {item}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </>
                   ) : (
                     <p style={{ color: '#6e7681', margin: '8px 0 0', fontSize: 13 }}>
                       Sem telemetria — o músico ainda não abriu o retorno WebSocket.
@@ -1211,6 +1314,7 @@ export function AdminApp() {
             token={token}
             showfile={showfile}
             musician={selfMusician}
+            audioInputLevels={audioInputLevels}
             onMusicianStripPatched={mergeMusicianStripIntoShowfile}
           />
         </>
@@ -1287,11 +1391,35 @@ function gainFaderMarks(maxGain: number): string[] {
   return ['0 dB', '-6', '-12', '-24', '-80']
 }
 
-function vuFillFromGain(gain: number, minGain: number, maxGain: number): CSSProperties {
-  const g = clampLin(gain, minGain, maxGain)
-  const span = Math.max(1e-9, maxGain - minGain)
-  const pct = ((g - minGain) / span) * 100
+function vuFillFromLevel(level: number): CSSProperties {
+  const pct = Math.max(0, Math.min(100, Number(level || 0) * 100))
   return { '--vuFill': `${pct}%` } as CSSProperties
+}
+
+function channelVuLevel(
+  ch: Pick<ChannelStrip, 'captureInputIndex'>,
+  levelsByIndex: Record<string, number>,
+): number {
+  const idx = ch.captureInputIndex
+  if (typeof idx !== 'number') return 0
+  return Math.max(0, Math.min(1, Number(levelsByIndex[String(idx)] || 0)))
+}
+
+function groupVuLevel(
+  showfile: Showfile,
+  groupId: string,
+  levelsByIndex: Record<string, number>,
+): number {
+  const group = showfile.groups.find((g) => g.id === groupId)
+  if (!group) return 0
+  let peak = 0
+  for (const cid of group.channelIds) {
+    const ch = showfile.channels.find((item) => item.id === cid)
+    if (!ch) continue
+    const next = channelVuLevel(ch, levelsByIndex)
+    if (next > peak) peak = next
+  }
+  return peak
 }
 
 type CaptureInputMatrix = {
@@ -2256,12 +2384,14 @@ function parseJwtSub(token: string): string {
 
 function DeskVolumeStrip({
   gain,
+  vuLevel = 0,
   meterTitle = 'Volume',
   onCommit,
   rangeMin = 0,
   rangeMax = 4,
 }: {
   gain: number
+  vuLevel?: number
   meterTitle?: string
   onCommit: (value: number) => Promise<void>
   rangeMin?: number
@@ -2336,7 +2466,7 @@ function DeskVolumeStrip({
           <div className="volCard__vuFrame">
             <div className="volCard__vuLabel">VU</div>
             <div className="volCard__vuMeterRow">
-              <div className="volCard__vuMeter" style={vuFillFromGain(local, rangeMin, rangeMax)} />
+              <div className="volCard__vuMeter" style={vuFillFromLevel(vuLevel)} />
               <div className="volCard__marks">
                 {gainFaderMarks(rangeMax).map((mark) => (
                   <span key={mark}>{mark}</span>
@@ -2387,16 +2517,19 @@ function ChannelVolumeStrip({
   token,
   channelId,
   gain,
+  vuLevel,
   onChannelStripPatched,
 }: {
   token: string
   channelId: string
   gain: number
+  vuLevel?: number
   onChannelStripPatched?: (ch: ChannelStrip) => void
 }) {
   return (
     <DeskVolumeStrip
       gain={gain}
+      vuLevel={vuLevel}
       meterTitle="Volume"
       onCommit={async (v) => {
         const ch = await api<ChannelStrip>(`/api/showfile/channel/${channelId}`, {
@@ -2413,11 +2546,13 @@ function ChannelVolumeStrip({
 function ChannelTable({
   token,
   showfile,
+  audioInputLevels,
   onSaved,
   onChannelStripPatched,
 }: {
   token: string
   showfile: Showfile
+  audioInputLevels: AudioInputLevelsResponse | null
   onSaved: () => void
   onChannelStripPatched?: (ch: ChannelStrip) => void
 }) {
@@ -2653,6 +2788,7 @@ function ChannelTable({
                 token={token}
                 channelId={ch.id}
                 gain={ch.gain}
+                vuLevel={channelVuLevel(ch, audioInputLevels?.levelsByIndex ?? {})}
                 onChannelStripPatched={onChannelStripPatched}
               />
               <div className="eqKnobCol">
@@ -2696,11 +2832,13 @@ function ChannelTable({
 function MusicianTable({
   showfile,
   token,
+  audioInputLevels,
   onSaved,
   onMusicianStripPatched,
 }: {
   showfile: Showfile
   token: string
+  audioInputLevels: AudioInputLevelsResponse | null
   onSaved: () => void
   onMusicianStripPatched?: (m: MusicianStrip) => void
 }) {
@@ -2936,6 +3074,7 @@ function MusicianTable({
               token={token}
               showfile={showfile}
               musician={selectedMusician}
+              audioInputLevels={audioInputLevels}
               onMusicianStripPatched={onMusicianStripPatched}
             />
           ) : (
@@ -2951,11 +3090,13 @@ function MusicianControls({
   token,
   showfile,
   musician,
+  audioInputLevels,
   onMusicianStripPatched,
 }: {
   token: string
   showfile: Showfile
   musician: Showfile['musicians'][0]
+  audioInputLevels: AudioInputLevelsResponse | null
   onMusicianStripPatched?: (m: MusicianStrip) => void
 }) {
   const ids = useMemo(
@@ -2963,6 +3104,7 @@ function MusicianControls({
     [musician, showfile],
   )
   const groupIds = musician.scope.groupIds
+  const levelsByIndex = audioInputLevels?.levelsByIndex ?? {}
 
   return (
     <div style={{ minWidth: 0, maxWidth: '100%' }}>
@@ -3010,6 +3152,7 @@ function MusicianControls({
                 <DeskVolumeStrip
                   key={`${musician.id}-g-${gid}`}
                   gain={gv}
+                  vuLevel={groupVuLevel(showfile, gid, levelsByIndex)}
                   meterTitle="Send"
                   onCommit={async (v) => {
                     const next = await api<MusicianStrip>(
@@ -3069,6 +3212,7 @@ function MusicianControls({
                 <DeskVolumeStrip
                   key={`${musician.id}-s-${cid}`}
                   gain={musician.sendGains[cid] ?? 1}
+                  vuLevel={channelVuLevel(ch, levelsByIndex)}
                   meterTitle="Send"
                   onCommit={async (v) => {
                     const next = await api<MusicianStrip>(

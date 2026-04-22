@@ -3,7 +3,7 @@
  * Usa fila assíncrona, jitter buffer adaptativo, medidor master profissional
  * e visualização espectral sem depender de APIs nativas fora do Expo/WebView.
  */
-export type StreamRetornoLatency = 'low' | 'stable'
+export type StreamRetornoLatency = 'pro' | 'low' | 'stable' | 'wifi24'
 
 export type StreamRetornoTelemetryOpts = {
   /** Ex.: http://192.168.0.5:3847 — sem barra final */
@@ -261,35 +261,74 @@ export function buildStreamRetornoPlayerHtml(
   var WS_URL = ${injectedWs};
   var LATENCY = ${injectedLatency};
   var SR_IN = 48000;
-  var PROFILE = LATENCY === 'stable'
-    ? {
-        name: '2.4',
-        margin: 0.036,
-        maxAhead: 0.11,
-        maxRawFrames: 14,
-        latencyHint: 0.035,
-        adaptiveMax: 0.05,
-        dropGrow: 0.002,
-        underrunGrow: 0.004,
-        lowpassHz: 15000,
-        highpassHz: 40,
-        burstFast: 4,
-        burstSafe: 2
-      }
-    : {
-        name: '5',
-        margin: 0.014,
-        maxAhead: 0.065,
-        maxRawFrames: 8,
-        latencyHint: 0.015,
-        adaptiveMax: 0.028,
-        dropGrow: 0.0015,
-        underrunGrow: 0.0025,
-        lowpassHz: 17200,
-        highpassHz: 36,
-        burstFast: 4,
-        burstSafe: 2
-      };
+  var PROFILE =
+    LATENCY === 'pro'
+      ? {
+          name: '5-pro',
+          transport: 'pro',
+          margin: 0.008,
+          maxAhead: 0.028,
+          maxRawFrames: 4,
+          latencyHint: 0.008,
+          adaptiveMax: 0.016,
+          dropGrow: 0.001,
+          underrunGrow: 0.0015,
+          lowpassHz: 18200,
+          highpassHz: 34,
+          burstFast: 6,
+          burstSafe: 3,
+          telemetryMs: 1000
+        }
+      : LATENCY === 'wifi24'
+      ? {
+          name: '2.4',
+          transport: 'wifi24',
+          margin: 0.052,
+          maxAhead: 0.16,
+          maxRawFrames: 18,
+          latencyHint: 0.04,
+          adaptiveMax: 0.12,
+          dropGrow: 0.004,
+          underrunGrow: 0.006,
+          lowpassHz: 14800,
+          highpassHz: 40,
+          burstFast: 4,
+          burstSafe: 2,
+          telemetryMs: 1500
+        }
+      : LATENCY === 'stable'
+        ? {
+            name: 'stable',
+            transport: 'stable',
+            margin: 0.036,
+            maxAhead: 0.11,
+            maxRawFrames: 14,
+            latencyHint: 0.035,
+            adaptiveMax: 0.05,
+            dropGrow: 0.002,
+            underrunGrow: 0.004,
+            lowpassHz: 15000,
+            highpassHz: 40,
+            burstFast: 4,
+            burstSafe: 2,
+            telemetryMs: 2000
+          }
+        : {
+            name: '5',
+            transport: 'low',
+            margin: 0.014,
+            maxAhead: 0.065,
+            maxRawFrames: 8,
+            latencyHint: 0.015,
+            adaptiveMax: 0.028,
+            dropGrow: 0.0015,
+            underrunGrow: 0.0025,
+            lowpassHz: 17200,
+            highpassHz: 36,
+            burstFast: 4,
+            burstSafe: 2,
+            telemetryMs: 2000
+          };
   var st = document.getElementById('st');
   var m = document.getElementById('m');
   var go = document.getElementById('go');
@@ -334,6 +373,11 @@ export function buildStreamRetornoPlayerHtml(
   var helloInfo = { blockSamples: 0, latencyProfile: LATENCY };
   var lastPacketSeq = -1;
   var sequenceGaps = 0;
+  var lastMeasuredRttMs = 0;
+  var lastEstimatedE2eMs = 0;
+  var estimatedE2ePeakMs = 0;
+  var slaOver1s = 0;
+  var slowSampleStreak = 0;
   var TELEMETRY = ${injectedTelemetry};
   var teleTimer = null;
   var reconnectAttempt = 0;
@@ -341,6 +385,8 @@ export function buildStreamRetornoPlayerHtml(
   var meterTimeDataL = null;
   var meterTimeDataR = null;
   var spectrumData = null;
+  var WIRE_FLAG_MULAW = 1;
+  var MULAW_BIAS = 0x84;
 
   function clamp(v, a, b) {
     return Math.max(a, Math.min(b, v));
@@ -348,6 +394,16 @@ export function buildStreamRetornoPlayerHtml(
 
   function dbFromLinear(v) {
     return Math.max(-80, Math.min(6, 20 * Math.log10(Math.max(0.0001, v))));
+  }
+
+  function mulawToLinearSample(byte) {
+    var mu = (~byte) & 0xff;
+    var sign = mu & 0x80;
+    var exponent = (mu >> 4) & 0x07;
+    var mantissa = mu & 0x0f;
+    var sample = ((mantissa << 3) + MULAW_BIAS) << exponent;
+    sample -= MULAW_BIAS;
+    return sign ? -sample : sample;
   }
 
   function holdMs() {
@@ -373,14 +429,37 @@ export function buildStreamRetornoPlayerHtml(
       (u8[9] << 16) |
       (u8[10] << 8) |
       u8[11];
+    var flags = (u8[6] << 8) | u8[7];
     var spc = (u8[20] << 8) | u8[21];
     var pb = (u8[22] << 8) | u8[23];
-    if (u8.byteLength < 32 + pb || pb !== spc * 4) return null;
+    var usesMulaw = (flags & WIRE_FLAG_MULAW) !== 0;
+    if (u8.byteLength < 32 + pb) return null;
+    if ((!usesMulaw && pb !== spc * 4) || (usesMulaw && pb !== spc * 2)) return null;
+    var tsHi =
+      ((u8[12] << 24) >>> 0) |
+      (u8[13] << 16) |
+      (u8[14] << 8) |
+      u8[15];
+    var tsLo =
+      ((u8[16] << 24) >>> 0) |
+      (u8[17] << 16) |
+      (u8[18] << 8) |
+      u8[19];
     var pcm = new Int16Array(spc * 2);
-    var dv = new DataView(u8.buffer, u8.byteOffset + 32, pb);
     var j;
-    for (j = 0; j < pcm.length; j++) pcm[j] = dv.getInt16(j * 2, true);
-    return { pcm: pcm, sequence: seq, frames: spc };
+    if (usesMulaw) {
+      for (j = 0; j < pcm.length; j++) pcm[j] = mulawToLinearSample(u8[32 + j]);
+    } else {
+      var dv = new DataView(u8.buffer, u8.byteOffset + 32, pb);
+      for (j = 0; j < pcm.length; j++) pcm[j] = dv.getInt16(j * 2, true);
+    }
+    return {
+      pcm: pcm,
+      sequence: seq,
+      frames: spc,
+      serverTimestampNsApprox: tsHi * 4294967296 + tsLo,
+      codec: usesMulaw ? 'mulaw_u8' : 'pcm_s16'
+    };
   }
   function concatInt16(a, b) {
     var o = new Int16Array(a.length + b.length);
@@ -416,6 +495,29 @@ export function buildStreamRetornoPlayerHtml(
   function recoverPlaybackClock() {
     if (!ctx) return;
     nextPlayTime = ctx.currentTime + marginSec();
+  }
+
+  function estimateE2eLatencyMs(aheadMs) {
+    var serverBlockMs = helloInfo.blockSamples
+      ? (helloInfo.blockSamples / SR_IN) * 1000
+      : 0;
+    var estimate = Math.max(
+      0,
+      aheadMs + adaptiveExtraMargin * 1000 + serverBlockMs + lastMeasuredRttMs * 0.5
+    );
+    lastEstimatedE2eMs = estimate;
+    if (estimate > estimatedE2ePeakMs) estimatedE2ePeakMs = estimate;
+    if (estimate > 1000) {
+      slowSampleStreak++;
+      slaOver1s++;
+      if (slowSampleStreak >= 2) {
+        recoverPlaybackClock();
+        adaptiveExtraMargin = Math.max(0, adaptiveExtraMargin - 0.006);
+      }
+    } else {
+      slowSampleStreak = 0;
+    }
+    return estimate;
   }
 
   function ensurePump(delayMs) {
@@ -609,6 +711,8 @@ export function buildStreamRetornoPlayerHtml(
       }
       var t = ctx.currentTime;
       var ahead = nextPlayTime - t;
+      var aheadMs = ahead > 0 ? ahead * 1000 : 0;
+      var e2eMs = estimateE2eLatencyMs(aheadMs);
       stats.textContent =
         'drops=' +
         drops +
@@ -617,16 +721,23 @@ export function buildStreamRetornoPlayerHtml(
         ' | underruns=' +
         underruns +
         ' | ahead=' +
-        (ahead > 0 ? (ahead * 1000).toFixed(0) : '0') +
+        (aheadMs > 0 ? aheadMs.toFixed(0) : '0') +
       ' ms | perfil=' +
         PROFILE.name +
         ' (' +
         LATENCY +
         ')' +
+        ' | e2e~' +
+        e2eMs.toFixed(0) +
+        ' ms' +
+        ' | SLA<1s=' +
+        (e2eMs < 1000 ? 'OK' : 'VIOLADO') +
         ' | margem alvo=' +
         Math.round(marginSec() * 1000) +
         ' ms | buffer adapt=' +
         Math.round(adaptiveExtraMargin * 1000) +
+        ' ms | RTT~' +
+        Math.round(lastMeasuredRttMs) +
         ' ms | server=' +
         (helloInfo.blockSamples ? helloInfo.blockSamples : '--') +
         ' smp' +
@@ -642,6 +753,12 @@ export function buildStreamRetornoPlayerHtml(
   function enqueueRaw(ab) {
     if (rawQueue.length >= PROFILE.maxRawFrames) {
       rawQueue.shift();
+      if (PROFILE.transport === 'wifi24' && rawQueue.length > Math.max(6, PROFILE.maxRawFrames - 4)) {
+        rawQueue.splice(0, Math.max(0, rawQueue.length - 5));
+      }
+      if (PROFILE.transport === 'pro' && rawQueue.length > 2) {
+        rawQueue.splice(0, Math.max(0, rawQueue.length - 2));
+      }
       drops++;
       adaptiveExtraMargin = Math.min(PROFILE.adaptiveMax, adaptiveExtraMargin + PROFILE.dropGrow);
       recoverPlaybackClock();
@@ -656,6 +773,7 @@ export function buildStreamRetornoPlayerHtml(
     fetch(base + '/api/health')
       .then(function () {
         var rtt = Date.now() - t0;
+        lastMeasuredRttMs = rtt;
         return fetch(base + '/api/telemetry', {
           method: 'POST',
           headers: {
@@ -666,6 +784,14 @@ export function buildStreamRetornoPlayerHtml(
             rttMs: rtt,
             sequenceGaps: sequenceGaps,
             underruns: underruns,
+            drops: drops,
+            queueDepth: rawQueue.length,
+            aheadMs: Math.max(0, (nextPlayTime - (ctx ? ctx.currentTime : 0)) * 1000),
+            estimatedE2eMs: lastEstimatedE2eMs,
+            estimatedE2ePeakMs: estimatedE2ePeakMs,
+            adaptiveMarginMs: Math.round(adaptiveExtraMargin * 1000),
+            slaOver1s: slaOver1s,
+            latencyProfile: LATENCY,
           }),
         });
       })
@@ -704,7 +830,9 @@ export function buildStreamRetornoPlayerHtml(
               'Buffer do servidor: ' +
               (helloInfo.blockSamples || '--') +
               ' samples · perfil ws: ' +
-              helloInfo.latencyProfile;
+              helloInfo.latencyProfile +
+              ' · codec: ' +
+              (j.wireCodec || 'pcm_s16');
           }
         } catch (_e) {}
         return;
@@ -717,6 +845,7 @@ export function buildStreamRetornoPlayerHtml(
     };
     sock.onerror = function () {
       m.textContent = 'Erro de rede no WebSocket.';
+      slowSampleStreak = Math.max(slowSampleStreak, 1);
     };
     sock.onclose = function () {
       m.textContent = 'Ligação fechada — a voltar a ligar…';
@@ -735,7 +864,7 @@ export function buildStreamRetornoPlayerHtml(
       nextPlayTime = 0;
       rafId = requestAnimationFrame(tick);
       if (teleTimer) clearInterval(teleTimer);
-      teleTimer = setInterval(sendTelemetryOnce, 2000);
+      teleTimer = setInterval(sendTelemetryOnce, PROFILE.telemetryMs);
       sendTelemetryOnce();
     };
   }
@@ -749,7 +878,7 @@ export function buildStreamRetornoPlayerHtml(
       PROFILE.name +
       ', margem ~' +
       String(Math.round(marginSec() * 1000)) +
-      ' ms, ajustada dinamicamente quando houver jitter).';
+      ' ms, ajustada dinamicamente quando houver jitter; meta operacional: abaixo de 1000 ms).';
     try {
       ctx = new (window.AudioContext || window.webkitAudioContext)({
         sampleRate: SR_IN,
