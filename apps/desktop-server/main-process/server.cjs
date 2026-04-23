@@ -3003,11 +3003,22 @@ function createServices(app) {
         }),
       )
       const answer = await pc.createAnswer()
+      const tunedAnswerSdp = tuneWebRtcAudioSdp(answer && answer.sdp ? answer.sdp : '', latencyProfile)
+      if (!tunedAnswerSdp || !String(tunedAnswerSdp).trim()) {
+        throw new Error('answer_sdp_empty')
+      }
       await pc.setLocalDescription({
         type: 'answer',
-        sdp: tuneWebRtcAudioSdp(answer && answer.sdp ? answer.sdp : '', latencyProfile),
+        sdp: tunedAnswerSdp,
       })
       await waitIceGatheringComplete(pc, 350)
+      const localAnswerSdp =
+        pc.localDescription && typeof pc.localDescription.sdp === 'string'
+          ? pc.localDescription.sdp
+          : tunedAnswerSdp
+      if (!localAnswerSdp || !String(localAnswerSdp).trim()) {
+        throw new Error('local_answer_sdp_empty')
+      }
       webrtcSessions.set(sessionId, { id: strip.id, pc, source, track })
       let bucket = webrtcSessionsByMusician.get(strip.id)
       if (!bucket) {
@@ -3019,7 +3030,7 @@ function createServices(app) {
         ok: true,
         sessionId,
         type: 'answer',
-        sdp: pc.localDescription ? pc.localDescription.sdp : answer.sdp,
+        sdp: localAnswerSdp,
       })
     } catch (e) {
       disposeWebRtcSession(sessionId)
