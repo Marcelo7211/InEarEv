@@ -177,6 +177,11 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                 }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 DeskPillButton(
+                    label = "Palco (~200 ms)",
+                    active = lat == "mid200",
+                    onClick = { vm.latencyProfile.value = "mid200" },
+                )
+                DeskPillButton(
                     label = "Pro (~40 ms)",
                     active = lat == "pro",
                     onClick = { vm.latencyProfile.value = "pro" },

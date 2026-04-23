@@ -106,6 +106,7 @@ class RetornoAudioEngine(
             retornoLatencyProfile = latency
             playoutCatchupBacklogMs =
                 when (latency) {
+                    "mid200" -> 140.0
                     "pro" -> 42.0
                     "low" -> 72.0
                     "wifi24" -> 95.0
@@ -261,6 +262,7 @@ class RetornoAudioEngine(
             else -> u.port
         }
         val lat = when (latency) {
+            "mid200" -> "stable"
             "pro" -> "pro"
             "low" -> "low"
             "wifi24" -> "wifi24"
@@ -380,6 +382,7 @@ class RetornoAudioEngine(
         /* Fila no AudioTrack (HAL): com WS a taxa média pode parecer «em dia» mas o DSP leva segundos. */
         val halCapMs =
             when (retornoLatencyProfile) {
+                "mid200" -> 120
                 "pro" -> 48
                 "low" -> 72
                 "wifi24" -> 95

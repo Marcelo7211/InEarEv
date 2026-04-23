@@ -55,7 +55,7 @@ class InEarViewModel(application: Application) : AndroidViewModel(application) {
     private val _audioDebug = MutableStateFlow(AudioDebugResponse())
     val audioDebug: StateFlow<AudioDebugResponse> = _audioDebug.asStateFlow()
 
-    val latencyProfile = MutableStateFlow("pro")
+    val latencyProfile = MutableStateFlow("mid200")
 
     init {
         viewModelScope.launch {
