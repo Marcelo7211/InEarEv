@@ -127,7 +127,7 @@ class RetornoAudioEngine(
         peerConnection = null
     }
 
-    private fun connectWebRtcOnly(apiBase: String, token: String) {
+    private suspend fun connectWebRtcOnly(apiBase: String, token: String) {
         configureAudioRouteForRetorno()
         val iceGatheringDone = CountDownLatch(1)
         val factory = ensurePeerConnectionFactory()
