@@ -183,7 +183,7 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                     onClick = { vm.latencyProfile.value = "mid200" },
                 )
                 DeskPillButton(
-                    label = "Pro (~35 ms)",
+                    label = "Pro (~15 ms)",
                     active = lat == "pro",
                     onClick = { vm.latencyProfile.value = "pro" },
                 )
