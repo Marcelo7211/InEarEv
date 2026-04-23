@@ -15,8 +15,8 @@ android {
         applicationId = "com.inear.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.0.2-latency"
+        versionCode = 4
+        versionName = "1.0.3-webrtc"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -64,6 +64,7 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.8.4")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("io.github.webrtc-sdk:android:144.7559.04")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     debugImplementation("androidx.compose.ui:ui-tooling")

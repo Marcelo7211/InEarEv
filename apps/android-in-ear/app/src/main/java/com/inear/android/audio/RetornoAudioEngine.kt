@@ -1,5 +1,8 @@
 package com.inear.android.audio
 
+import android.content.Context
+import android.media.AudioManager
+import com.inear.android.net.InEarRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -8,31 +11,22 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
-import okio.ByteString
-import java.net.DatagramPacket
-import java.net.DatagramSocket
-import java.net.InetAddress
-import java.net.SocketTimeoutException
-import java.net.URL
-import java.nio.charset.StandardCharsets
+import org.webrtc.AudioTrack
+import org.webrtc.MediaConstraints
+import org.webrtc.MediaStream
+import org.webrtc.MediaStreamTrack
+import org.webrtc.PeerConnection
+import org.webrtc.PeerConnectionFactory
+import org.webrtc.RtpReceiver
+import org.webrtc.RtpTransceiver
+import org.webrtc.SdpObserver
+import org.webrtc.SessionDescription
+import org.webrtc.audio.JavaAudioDeviceModule
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import kotlin.concurrent.thread
-import org.json.JSONObject
-import com.inear.android.net.InEarRepository
+import java.util.concurrent.atomic.AtomicReference
 
-private const val UDP_CONTROL_PORT = 9877
 private const val SAMPLE_RATE = 48_000
-
-/** Margem acima do tecto configurado do sink antes de drenar (só RAM + eventual flush). */
-private const val CATCHUP_ABOVE_QUEUE_HEADROOM_MS = 18
-
-/** Nunca deixar o «PCM recebido à frente do relógio» ultrapassar isto (ms), qualquer que seja o perfil. */
-private const val PLAYOUT_BACKLOG_ABSOLUTE_MAX_MS = 160.0
 
 data class RetornoStats(
     val transport: String = "off",
@@ -48,85 +42,61 @@ data class RetornoStats(
 )
 
 /**
- * Retorno só por PCM INE1 (UDP → WebSocket). WebRTC foi removido do arranque: em LAN o RTP
- * competia com o PCM e gerava chiado; o caminho estável é o mesmo wireframe do servidor.
- *
- * **Rede interna / LAN:** prefere sempre **UDP** (controlo :9877, PCM :9876) — o cliente tenta-o
- * primeiro; evita filas gigantes de TCP no WebSocket. Garante firewall/router a permitir UDP
- * entre o telemóvel e o host do servidor.
+ * Retorno Android agora é WebRTC-only. O servidor expõe `/api/webrtc/offer` com áudio Opus
+ * recebido via `RTCAudioSource`; o cliente cria uma sessão `recvonly` e deixa o WebRTC gerir
+ * jitter buffer, PLC e playout nativo.
  */
 class RetornoAudioEngine(
-    @Suppress("UNUSED_PARAMETER") private val appContext: android.content.Context,
+    private val appContext: Context,
     private val scope: CoroutineScope,
-    @Suppress("UNUSED_PARAMETER")
     private val repository: InEarRepository = InEarRepository(),
-    private val httpClient: OkHttpClient = OkHttpClient.Builder()
-        .readTimeout(0, TimeUnit.MILLISECONDS)
-        .pingInterval(25, TimeUnit.SECONDS)
-        .build(),
 ) {
-    private val sink = PcmAudioTrackSink(SAMPLE_RATE)
     private val _stats = MutableStateFlow(RetornoStats())
     val stats: StateFlow<RetornoStats> = _stats.asStateFlow()
 
+    private val audioManager =
+        appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
     private var job: Job? = null
-    private var udpSocket: DatagramSocket? = null
-    private var ws: WebSocket? = null
-    private var recvThread: Thread? = null
+    private var peerConnectionFactory: PeerConnectionFactory? = null
+    private var peerConnection: PeerConnection? = null
+    private var remoteAudioTrack: AudioTrack? = null
 
     @Volatile
     private var running = false
 
-    @Volatile
-    private var lastSeq: Int? = null
-
-    /**
-     * Início da janela «PCM recebido vs tempo real» (bursts TCP / WS).
-     * Usa [System.nanoTime] para não subestimar o atraso quando muitos frames chegam no mesmo ms.
-     */
-    private var playoutSessionStartNs: Long = 0L
-
-    private var totalReceivedMediaMs: Double = 0.0
-
-    /** Se (PCM acumulado − tempo real) > isto, drena playout (ms). */
-    private var playoutCatchupBacklogMs: Double = 200.0
-
-    /** Perfil passado a [start] — usado para limiar da fila HAL (TCP 2,4 GHz). */
     private var retornoLatencyProfile: String = "stable"
-
-    private fun resetPlayoutDebt() {
-        playoutSessionStartNs = 0L
-        totalReceivedMediaMs = 0.0
-    }
+    private var masterGain: Float = 1f
+    private var previousAudioMode: Int? = null
+    private var previousSpeakerphone: Boolean? = null
+    private var previousMicMute: Boolean? = null
 
     fun start(apiBase: String, token: String, latency: String) {
         job?.cancel()
         job = scope.launch(Dispatchers.IO) {
             stopInternal()
             retornoLatencyProfile = latency
-            playoutCatchupBacklogMs =
-                when (latency) {
-                    "mid200" -> 140.0
-                    "pro" -> 42.0
-                    "low" -> 72.0
-                    "wifi24" -> 95.0
-                    else -> 160.0
-                }
-            resetPlayoutDebt()
             running = true
-            lastSeq = null
-            _stats.value = RetornoStats(transport = "starting", connected = false, playing = false)
-            try {
-                val host = URL(apiBase.trim().trimEnd('/')).host
-                if (connectUdpFirst(host, token, latency)) return@launch
-                if (running) connectWebSocketOnly(apiBase, token, latency)
-            } catch (e: Exception) {
-                _stats.value = RetornoStats(
-                    transport = "error",
+            _stats.value =
+                RetornoStats(
+                    transport = "starting",
                     connected = false,
                     playing = false,
-                    lastError = e.message,
+                    estimatedLatencyMs = targetLatencyMs(latency),
                 )
+            try {
+                connectWebRtcOnly(apiBase, token)
+            } catch (e: Exception) {
+                stopPeerConnection()
+                restoreAudioRoute()
+                _stats.value =
+                    RetornoStats(
+                        transport = "error",
+                        connected = false,
+                        playing = false,
+                        lastError = e.message,
+                        estimatedLatencyMs = targetLatencyMs(latency),
+                    )
             }
         }
     }
@@ -139,285 +109,344 @@ class RetornoAudioEngine(
 
     private fun stopInternal() {
         running = false
-        recvThread?.interrupt()
-        recvThread = null
-        try {
-            udpSocket?.close()
-        } catch (_: Exception) {
-        }
-        udpSocket = null
-        try {
-            ws?.close(1000, "stop")
-        } catch (_: Exception) {
-        }
-        ws = null
-        sink.stop()
-        resetPlayoutDebt()
+        stopPeerConnection()
+        restoreAudioRoute()
         _stats.value = RetornoStats()
     }
 
-    /** UDP INE1 primeiro (mesma porta que o registo de controlo). */
-    private fun connectUdpFirst(host: String, token: String, latency: String): Boolean {
-        val socket = DatagramSocket()
+    private fun stopPeerConnection() {
         try {
-            try {
-                /* Em palco interessa mais frescura do que "não perder nada": evita segundos de backlog no kernel. */
-                socket.receiveBufferSize = 64 * 1024
-            } catch (_: Exception) {
-            }
-            val reg = """{"t":"reg","token":"$token"}""".toByteArray(StandardCharsets.UTF_8)
-            socket.send(
-                DatagramPacket(reg, reg.size, InetAddress.getByName(host), UDP_CONTROL_PORT),
-            )
-            val buf = ByteArray(65536)
-            val deadline = System.currentTimeMillis() + 5000
-            while (running && System.currentTimeMillis() < deadline) {
-                socket.soTimeout = 200
-                try {
-                    val p = DatagramPacket(buf, buf.size)
-                    socket.receive(p)
-                    val off = p.offset
-                    val len = p.length
-                    if (len < Ine1Decoder.HEADER_BYTES) continue
-                    var frame = Ine1Decoder.tryDecode(buf, off, len) ?: continue
-                    while (true) {
-                        try {
-                            socket.soTimeout = 1
-                            val newer = DatagramPacket(buf, buf.size)
-                            socket.receive(newer)
-                            val candidate =
-                                Ine1Decoder.tryDecode(buf, newer.offset, newer.length) ?: continue
-                            frame = candidate
-                        } catch (_: SocketTimeoutException) {
-                            break
-                        }
-                    }
-                    sink.start(latency)
-                    udpSocket = socket
-                    onIne1Frame(frame)
-                    _stats.value = RetornoStats(
-                        transport = "udp",
-                        connected = true,
-                        playing = true,
-                        lastError = null,
-                        queuedFrames = sink.queuedFrames(),
-                        queuedAudioMs = sink.queuedAudioMsApprox(),
-                        halQueuedMs = sink.halQueuedMsApprox(),
-                        estimatedLatencyMs = sink.queuedAudioMsApprox() + sink.halQueuedMsApprox(),
-                    )
-                    val rcv = socket
-                    recvThread = thread(name = "inear-udp") {
-                        val localBuf = ByteArray(65536)
-                        while (running && !Thread.currentThread().isInterrupted) {
-                            try {
-                                rcv.soTimeout = 5000
-                                val pkt = DatagramPacket(localBuf, localBuf.size)
-                                rcv.receive(pkt)
-                                var latest =
-                                    Ine1Decoder.tryDecode(localBuf, pkt.offset, pkt.length) ?: continue
-                                while (true) {
-                                    try {
-                                        rcv.soTimeout = 1
-                                        val newer = DatagramPacket(localBuf, localBuf.size)
-                                        rcv.receive(newer)
-                                        val candidate =
-                                            Ine1Decoder.tryDecode(localBuf, newer.offset, newer.length)
-                                                ?: continue
-                                        latest = candidate
-                                    } catch (_: SocketTimeoutException) {
-                                        break
-                                    }
-                                }
-                                onIne1Frame(latest)
-                            } catch (_: SocketTimeoutException) {
-                                continue
-                            } catch (_: Exception) {
-                                break
-                            }
-                        }
-                    }
-                    return true
-                } catch (_: SocketTimeoutException) {
-                    continue
-                }
-            }
+            remoteAudioTrack?.setEnabled(false)
         } catch (_: Exception) {
-            /* ignore */
-        } finally {
-            if (udpSocket !== socket) {
-                try {
-                    socket.close()
-                } catch (_: Exception) {
-                }
-            }
         }
-        return false
+        remoteAudioTrack = null
+        try {
+            peerConnection?.close()
+        } catch (_: Exception) {
+        }
+        peerConnection = null
     }
 
-    private fun connectWebSocketOnly(apiBase: String, token: String, latency: String) {
-        val u = URL(apiBase.trim().trimEnd('/'))
-        val wsScheme = if (u.protocol == "https") "wss" else "ws"
-        val port = when (u.port) {
-            -1 -> 3847
-            else -> u.port
-        }
-        val lat = when (latency) {
-            "mid200" -> "stable"
-            "pro" -> "pro"
-            "low" -> "low"
-            "wifi24" -> "wifi24"
-            else -> "stable"
-        }
-        val wsUrl =
-            "$wsScheme://${u.host}:$port/api/stream/audio?token=" +
-                java.net.URLEncoder.encode(token, Charsets.UTF_8.name()) +
-                "&latency=" + java.net.URLEncoder.encode(lat, Charsets.UTF_8.name())
-        sink.start(lat)
-        val req = Request.Builder().url(wsUrl).build()
-        ws = httpClient.newWebSocket(
-            req,
-            object : WebSocketListener() {
-                override fun onOpen(webSocket: WebSocket, response: Response) {
-                    if (!running) {
-                        try {
-                            webSocket.close(1000, "stop")
-                        } catch (_: Exception) {
-                        }
-                        return
-                    }
-                    _stats.value = RetornoStats(
-                        transport = "ws",
-                        connected = true,
-                        playing = true,
-                        lastError = null,
-                        queuedFrames = sink.queuedFrames(),
-                        queuedAudioMs = sink.queuedAudioMsApprox(),
-                        halQueuedMs = sink.halQueuedMsApprox(),
-                        estimatedLatencyMs = sink.queuedAudioMsApprox() + sink.halQueuedMsApprox(),
-                    )
-                }
+    private fun connectWebRtcOnly(apiBase: String, token: String) {
+        configureAudioRouteForRetorno()
+        val iceGatheringDone = CountDownLatch(1)
+        val factory = ensurePeerConnectionFactory()
+        val pc =
+            factory.createPeerConnection(
+                PeerConnection.RTCConfiguration(emptyList()),
+                createPeerConnectionObserver(iceGatheringDone),
+            ) ?: error("Falha ao criar PeerConnection WebRTC")
+        peerConnection = pc
+        pc.addTransceiver(
+            MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO,
+            RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.RECV_ONLY),
+        )
 
-                override fun onMessage(webSocket: WebSocket, text: String) {
-                    if (!running) return
-                    try {
-                        val j = JSONObject(text)
-                        if (j.optString("t") != "hello") return
-                        val hz = j.optInt("sampleRateHz", SAMPLE_RATE)
-                        val bs = j.optInt("blockSamples", 0)
-                        if (hz > 0 && hz != SAMPLE_RATE) {
-                            android.util.Log.d(
-                                "inear-retorno",
-                                "hello sampleRateHz=$hz (client assume $SAMPLE_RATE)",
-                            )
-                        }
-                        if (bs > 0) {
-                            android.util.Log.d("inear-retorno", "hello blockSamples=$bs")
-                        }
-                    } catch (_: Exception) {
-                    }
-                }
-
-                override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                    if (!running) return
-                    val arr = bytes.toByteArray()
-                    val frame = Ine1Decoder.tryDecode(arr, 0, arr.size) ?: return
-                    onIne1Frame(frame)
-                }
-
-                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    _stats.value = _stats.value.copy(
-                        connected = false,
-                        playing = false,
-                        lastError = t.message,
-                    )
-                }
-
-                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                    try {
-                        webSocket.close(1000, null)
-                    } catch (_: Exception) {
-                    }
-                }
-            },
+        val offer =
+            createOfferBlocking(
+                pc,
+                MediaConstraints().apply {
+                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
+                    mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+                },
+            )
+        setLocalDescriptionBlocking(pc, offer)
+        iceGatheringDone.await(1200, TimeUnit.MILLISECONDS)
+        val localSdp = pc.localDescription?.description ?: offer.description
+        val answer = repository.createWebRtcAnswer(apiBase, token, localSdp)
+        if (!running) return
+        setRemoteDescriptionBlocking(
+            pc,
+            SessionDescription(SessionDescription.Type.ANSWER, answer.sdp),
+        )
+        updateStats(
+            transport = "webrtc",
+            connected = false,
+            playing = false,
+            clearError = true,
         )
     }
 
-    private fun onIne1Frame(frame: Ine1Decoder.Frame) {
-        var gapAdd = 0
-        val prev = lastSeq
-        if (prev != null) {
-            val mask = 0x7fff_ffffL
-            fun u31(x: Int): Long = x.toLong() and mask
-            val expected = ((u31(prev) + 1L) and mask).toInt()
-            if (frame.sequence != expected) {
-                val ahead = ((u31(frame.sequence) - u31(expected) + (mask + 1L)) and mask).toInt()
-                val behind = ((u31(expected) - u31(frame.sequence) + (mask + 1L)) and mask).toInt()
-                if (behind in 1..200) {
-                    return
+    private fun createPeerConnectionObserver(iceGatheringDone: CountDownLatch): PeerConnection.Observer =
+        object : PeerConnection.Observer {
+            override fun onSignalingChange(newState: PeerConnection.SignalingState?) = Unit
+
+            override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState?) {
+                if (!running) return
+                when (newState) {
+                    PeerConnection.IceConnectionState.CONNECTED,
+                    PeerConnection.IceConnectionState.COMPLETED,
+                    ->
+                        updateStats(
+                            transport = "webrtc",
+                            connected = true,
+                            clearError = true,
+                        )
+
+                    PeerConnection.IceConnectionState.DISCONNECTED,
+                    PeerConnection.IceConnectionState.CLOSED,
+                    ->
+                        updateStats(
+                            transport = "webrtc",
+                            connected = false,
+                            playing = false,
+                        )
+
+                    PeerConnection.IceConnectionState.FAILED ->
+                        updateStats(
+                            transport = "error",
+                            connected = false,
+                            playing = false,
+                            lastError = "WebRTC ICE falhou",
+                        )
+
+                    else -> Unit
                 }
-                gapAdd = ahead.coerceIn(0, 10_000)
+            }
+
+            override fun onStandardizedIceConnectionChange(newState: PeerConnection.IceConnectionState?) =
+                Unit
+
+            override fun onConnectionChange(newState: PeerConnection.PeerConnectionState?) {
+                if (!running) return
+                when (newState) {
+                    PeerConnection.PeerConnectionState.CONNECTED ->
+                        updateStats(
+                            transport = "webrtc",
+                            connected = true,
+                            clearError = true,
+                        )
+
+                    PeerConnection.PeerConnectionState.DISCONNECTED,
+                    PeerConnection.PeerConnectionState.CLOSED,
+                    ->
+                        updateStats(
+                            transport = "webrtc",
+                            connected = false,
+                            playing = false,
+                        )
+
+                    PeerConnection.PeerConnectionState.FAILED ->
+                        updateStats(
+                            transport = "error",
+                            connected = false,
+                            playing = false,
+                            lastError = "WebRTC desligou por falha",
+                        )
+
+                    else -> Unit
+                }
+            }
+
+            override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
+
+            override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState?) {
+                if (newState == PeerConnection.IceGatheringState.COMPLETE) {
+                    iceGatheringDone.countDown()
+                }
+            }
+
+            override fun onIceCandidate(candidate: org.webrtc.IceCandidate?) = Unit
+
+            override fun onIceCandidatesRemoved(candidates: Array<out org.webrtc.IceCandidate>?) = Unit
+
+            override fun onSelectedCandidatePairChanged(event: org.webrtc.CandidatePairChangeEvent?) =
+                Unit
+
+            override fun onAddStream(stream: MediaStream?) {
+                val remoteTrack = stream?.audioTracks?.firstOrNull() ?: return
+                attachRemoteAudioTrack(remoteTrack)
+            }
+
+            override fun onRemoveStream(stream: MediaStream?) = Unit
+
+            override fun onDataChannel(dataChannel: org.webrtc.DataChannel?) = Unit
+
+            override fun onRenegotiationNeeded() = Unit
+
+            override fun onAddTrack(receiver: RtpReceiver?, mediaStreams: Array<out MediaStream>?) {
+                val track = receiver?.track()
+                if (track is AudioTrack) attachRemoteAudioTrack(track)
+            }
+
+            override fun onTrack(transceiver: RtpTransceiver?) {
+                val track = transceiver?.receiver?.track()
+                if (track is AudioTrack) attachRemoteAudioTrack(track)
             }
         }
-        lastSeq = frame.sequence
 
-        if (playoutSessionStartNs == 0L) {
-            playoutSessionStartNs = System.nanoTime()
-            totalReceivedMediaMs = 0.0
+    private fun attachRemoteAudioTrack(track: AudioTrack) {
+        if (!running) return
+        remoteAudioTrack = track
+        try {
+            track.setEnabled(true)
+            track.setVolume(masterGain.toDouble())
+        } catch (_: Exception) {
         }
-        val frameMs = frame.samplesPerChannel * 1000.0 / SAMPLE_RATE
-        totalReceivedMediaMs += frameMs
-        val wallMs = (System.nanoTime() - playoutSessionStartNs) / 1_000_000.0
-        val backlogMs = totalReceivedMediaMs - wallMs
-        if (backlogMs > playoutCatchupBacklogMs || backlogMs > PLAYOUT_BACKLOG_ABSOLUTE_MAX_MS) {
-            sink.drainPlayoutBuffer()
-            resetPlayoutDebt()
-        }
+        updateStats(
+            transport = "webrtc",
+            connected = true,
+            playing = true,
+            clearError = true,
+        )
+    }
 
-        val cap = sink.maxConfiguredPlayoutQueueMs()
-        if (sink.queuedAudioMsApprox() > cap + CATCHUP_ABOVE_QUEUE_HEADROOM_MS) {
-            sink.drainPlayoutBuffer()
-            resetPlayoutDebt()
-        }
-
-        /* Fila no AudioTrack (HAL): com WS a taxa média pode parecer «em dia» mas o DSP leva segundos. */
-        val halCapMs =
-            when (retornoLatencyProfile) {
-                "mid200" -> 120
-                "pro" -> 48
-                "low" -> 72
-                "wifi24" -> 95
-                else -> 130
-            }
-        if (totalReceivedMediaMs > 50.0 && sink.halQueuedMsApprox() > halCapMs) {
-            sink.drainPlayoutBuffer()
-            resetPlayoutDebt()
-        }
-
-        if (gapAdd in 1..3) {
-            val silent = ShortArray(frame.samplesPerChannel * gapAdd * 2)
-            sink.writeInterleavedS16(silent, silent.size)
-        } else if (gapAdd > 3) {
-            sink.drainPlayoutBuffer()
-            resetPlayoutDebt()
-        }
-
-        sink.writeInterleavedS16(frame.pcmInterleavedS16, frame.pcmInterleavedS16.size)
-
-        _stats.update { s ->
-            val queuedAudioMs = sink.queuedAudioMsApprox()
-            val halQueuedMs = sink.halQueuedMsApprox()
-            s.copy(
-                framesReceived = s.framesReceived + 1,
-                queuedFrames = sink.queuedFrames(),
-                queuedAudioMs = queuedAudioMs,
-                halQueuedMs = halQueuedMs,
-                estimatedLatencyMs = queuedAudioMs + halQueuedMs,
-                sequenceGaps = if (gapAdd > 0) s.sequenceGaps + gapAdd else s.sequenceGaps,
+    private fun updateStats(
+        transport: String? = null,
+        connected: Boolean? = null,
+        playing: Boolean? = null,
+        lastError: String? = null,
+        clearError: Boolean = false,
+    ) {
+        _stats.update { current ->
+            current.copy(
+                transport = transport ?: current.transport,
+                connected = connected ?: current.connected,
+                playing = playing ?: current.playing,
+                lastError =
+                    when {
+                        clearError -> null
+                        lastError != null -> lastError
+                        else -> current.lastError
+                    },
+                estimatedLatencyMs = targetLatencyMs(retornoLatencyProfile),
+                queuedFrames = 0,
+                queuedAudioMs = 0,
+                halQueuedMs = 0,
             )
         }
     }
 
+    private fun targetLatencyMs(latency: String): Int =
+        when (latency) {
+            "pro" -> 90
+            "low" -> 130
+            "wifi24" -> 180
+            "mid200" -> 200
+            else -> 220
+        }
+
+    private fun configureAudioRouteForRetorno() {
+        if (previousAudioMode == null) previousAudioMode = audioManager.mode
+        if (previousSpeakerphone == null) previousSpeakerphone = audioManager.isSpeakerphoneOn
+        if (previousMicMute == null) previousMicMute = audioManager.isMicrophoneMute
+        try {
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            audioManager.isSpeakerphoneOn = false
+            audioManager.isMicrophoneMute = false
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun restoreAudioRoute() {
+        try {
+            previousAudioMode?.let { audioManager.mode = it }
+        } catch (_: Exception) {
+        }
+        try {
+            previousSpeakerphone?.let { audioManager.isSpeakerphoneOn = it }
+        } catch (_: Exception) {
+        }
+        try {
+            previousMicMute?.let { audioManager.isMicrophoneMute = it }
+        } catch (_: Exception) {
+        }
+        previousAudioMode = null
+        previousSpeakerphone = null
+        previousMicMute = null
+    }
+
+    private fun ensurePeerConnectionFactory(): PeerConnectionFactory {
+        peerConnectionFactory?.let { return it }
+        synchronized(this) {
+            peerConnectionFactory?.let { return it }
+            PeerConnectionFactory.initialize(
+                PeerConnectionFactory.InitializationOptions.builder(appContext)
+                    .setEnableInternalTracer(false)
+                    .createInitializationOptions(),
+            )
+            val audioDeviceModule = JavaAudioDeviceModule.builder(appContext).createAudioDeviceModule()
+            val created =
+                PeerConnectionFactory.builder()
+                    .setAudioDeviceModule(audioDeviceModule)
+                    .createPeerConnectionFactory()
+            audioDeviceModule.release()
+            peerConnectionFactory = created
+            return created
+        }
+    }
+
+    private fun createOfferBlocking(
+        pc: PeerConnection,
+        constraints: MediaConstraints,
+    ): SessionDescription {
+        val latch = CountDownLatch(1)
+        val result = AtomicReference<SessionDescription?>()
+        val error = AtomicReference<String?>()
+        pc.createOffer(
+            object : SdpObserver {
+                override fun onCreateSuccess(desc: SessionDescription?) {
+                    result.set(desc)
+                    latch.countDown()
+                }
+
+                override fun onSetSuccess() = Unit
+
+                override fun onCreateFailure(message: String?) {
+                    error.set(message ?: "createOffer falhou")
+                    latch.countDown()
+                }
+
+                override fun onSetFailure(message: String?) = Unit
+            },
+            constraints,
+        )
+        if (!latch.await(8, TimeUnit.SECONDS)) error("Timeout ao criar oferta WebRTC")
+        error.get()?.let { error(it) }
+        return result.get() ?: error("Oferta WebRTC vazia")
+    }
+
+    private fun setLocalDescriptionBlocking(pc: PeerConnection, desc: SessionDescription) {
+        setDescriptionBlocking(desc) { observer -> pc.setLocalDescription(observer, desc) }
+    }
+
+    private fun setRemoteDescriptionBlocking(pc: PeerConnection, desc: SessionDescription) {
+        setDescriptionBlocking(desc) { observer -> pc.setRemoteDescription(observer, desc) }
+    }
+
+    private fun setDescriptionBlocking(
+        desc: SessionDescription,
+        setter: (SdpObserver) -> Unit,
+    ) {
+        val latch = CountDownLatch(1)
+        val error = AtomicReference<String?>()
+        setter(
+            object : SdpObserver {
+                override fun onCreateSuccess(desc: SessionDescription?) = Unit
+
+                override fun onSetSuccess() {
+                    latch.countDown()
+                }
+
+                override fun onCreateFailure(message: String?) = Unit
+
+                override fun onSetFailure(message: String?) {
+                    error.set(message ?: "setDescription falhou")
+                    latch.countDown()
+                }
+            },
+        )
+        if (!latch.await(8, TimeUnit.SECONDS)) {
+            error("Timeout ao aplicar SDP ${desc.type.canonicalForm()}")
+        }
+        error.get()?.let { error(it) }
+    }
+
     fun setMasterGain(g: Float) {
-        sink.setMaster(g)
+        masterGain = g
+        try {
+            remoteAudioTrack?.setVolume(g.toDouble())
+        } catch (_: Exception) {
+        }
     }
 }

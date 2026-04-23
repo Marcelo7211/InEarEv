@@ -10,3 +10,4 @@
     *** Companion;
     kotlinx.serialization.KSerializer serializer(...);
 }
+-keep class org.webrtc.** { *; }

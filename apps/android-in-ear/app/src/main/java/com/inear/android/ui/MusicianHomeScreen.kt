@@ -169,6 +169,7 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                 }
             val transportUserLabel =
                 when (stats.transport) {
+                    "webrtc" -> "WebRTC Opus"
                     "udp" -> "UDP dedicado"
                     "ws" -> "Fallback WebSocket"
                     "starting" -> "Conectando"
