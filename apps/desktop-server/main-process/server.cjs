@@ -2307,10 +2307,6 @@ function createServices(app) {
               'dshow',
               '-sample_rate',
               String(MVP_SAMPLE_RATE_HZ),
-              '-sample_size',
-              '16',
-              '-channels',
-              String(nCh),
               '-audio_buffer_size',
               String(dshowAudioBufferMs),
               ...(audioPinName ? ['-audio_pin_name', audioPinName] : []),
@@ -3027,14 +3023,14 @@ function createServices(app) {
       await pc.setRemoteDescription(
         new wrtc.RTCSessionDescription({
           type: 'offer',
-          sdp: tuneWebRtcAudioSdp(sdp, latencyProfile),
+          sdp,
         }),
       )
       const answer = await pc.createAnswer()
       if (!answer || !answer.sdp) {
         throw new Error('createAnswer_returned_empty')
       }
-      const tunedAnswerSdp = tuneWebRtcAudioSdp(answer && answer.sdp ? answer.sdp : '', latencyProfile)
+      const tunedAnswerSdp = answer && answer.sdp ? answer.sdp : ''
       if (!tunedAnswerSdp || !String(tunedAnswerSdp).trim()) {
         throw new Error('answer_sdp_empty')
       }

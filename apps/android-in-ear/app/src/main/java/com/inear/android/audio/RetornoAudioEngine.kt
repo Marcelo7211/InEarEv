@@ -151,30 +151,17 @@ class RetornoAudioEngine(
                     mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
                 },
             )
-        val tunedOffer =
-            SessionDescription(
-                offer.type,
-                tuneAudioSdpForLatency(offer.description, retornoLatencyProfile),
-            )
-        setLocalDescriptionBlocking(pc, tunedOffer)
+        setLocalDescriptionBlocking(pc, offer)
         iceGatheringDone.await(1200, TimeUnit.MILLISECONDS)
-        val localSdp = pc.localDescription?.description ?: tunedOffer.description
+        val localSdp = pc.localDescription?.description ?: offer.description
         val answer = repository.createWebRtcAnswer(apiBase, token, localSdp, retornoLatencyProfile)
         if (!running) return
         if (answer.sdp.isBlank()) {
             error("Servidor WebRTC respondeu SDP vazia")
         }
-        val tunedAnswer =
-            SessionDescription(
-                SessionDescription.Type.ANSWER,
-                tuneAudioSdpForLatency(answer.sdp, retornoLatencyProfile),
-            )
-        if (tunedAnswer.description.isBlank()) {
-            error("Answer WebRTC ficou vazia apos tuning")
-        }
         setRemoteDescriptionBlocking(
             pc,
-            tunedAnswer,
+            SessionDescription(SessionDescription.Type.ANSWER, answer.sdp),
         )
         updateStats(
             transport = "webrtc",
