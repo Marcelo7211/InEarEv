@@ -29,10 +29,10 @@ private const val UDP_CONTROL_PORT = 9877
 private const val SAMPLE_RATE = 48_000
 
 /** Margem acima do tecto configurado do sink antes de drenar (só RAM + eventual flush). */
-private const val CATCHUP_ABOVE_QUEUE_HEADROOM_MS = 36
+private const val CATCHUP_ABOVE_QUEUE_HEADROOM_MS = 18
 
 /** Nunca deixar o «PCM recebido à frente do relógio» ultrapassar isto (ms), qualquer que seja o perfil. */
-private const val PLAYOUT_BACKLOG_ABSOLUTE_MAX_MS = 420.0
+private const val PLAYOUT_BACKLOG_ABSOLUTE_MAX_MS = 160.0
 
 data class RetornoStats(
     val transport: String = "off",
@@ -106,10 +106,10 @@ class RetornoAudioEngine(
             retornoLatencyProfile = latency
             playoutCatchupBacklogMs =
                 when (latency) {
-                    "pro" -> 150.0
-                    "low" -> 170.0
-                    "wifi24" -> 115.0
-                    else -> 380.0
+                    "pro" -> 42.0
+                    "low" -> 72.0
+                    "wifi24" -> 95.0
+                    else -> 160.0
                 }
             resetPlayoutDebt()
             running = true
@@ -159,6 +159,11 @@ class RetornoAudioEngine(
     private fun connectUdpFirst(host: String, token: String, latency: String): Boolean {
         val socket = DatagramSocket()
         try {
+            try {
+                /* Em palco interessa mais frescura do que "não perder nada": evita segundos de backlog no kernel. */
+                socket.receiveBufferSize = 64 * 1024
+            } catch (_: Exception) {
+            }
             val reg = """{"t":"reg","token":"$token"}""".toByteArray(StandardCharsets.UTF_8)
             socket.send(
                 DatagramPacket(reg, reg.size, InetAddress.getByName(host), UDP_CONTROL_PORT),
@@ -173,7 +178,19 @@ class RetornoAudioEngine(
                     val off = p.offset
                     val len = p.length
                     if (len < Ine1Decoder.HEADER_BYTES) continue
-                    val frame = Ine1Decoder.tryDecode(buf, off, len) ?: continue
+                    var frame = Ine1Decoder.tryDecode(buf, off, len) ?: continue
+                    while (true) {
+                        try {
+                            socket.soTimeout = 1
+                            val newer = DatagramPacket(buf, buf.size)
+                            socket.receive(newer)
+                            val candidate =
+                                Ine1Decoder.tryDecode(buf, newer.offset, newer.length) ?: continue
+                            frame = candidate
+                        } catch (_: SocketTimeoutException) {
+                            break
+                        }
+                    }
                     sink.start(latency)
                     udpSocket = socket
                     onIne1Frame(frame)
@@ -195,8 +212,22 @@ class RetornoAudioEngine(
                                 rcv.soTimeout = 5000
                                 val pkt = DatagramPacket(localBuf, localBuf.size)
                                 rcv.receive(pkt)
-                                val f = Ine1Decoder.tryDecode(localBuf, pkt.offset, pkt.length) ?: continue
-                                onIne1Frame(f)
+                                var latest =
+                                    Ine1Decoder.tryDecode(localBuf, pkt.offset, pkt.length) ?: continue
+                                while (true) {
+                                    try {
+                                        rcv.soTimeout = 1
+                                        val newer = DatagramPacket(localBuf, localBuf.size)
+                                        rcv.receive(newer)
+                                        val candidate =
+                                            Ine1Decoder.tryDecode(localBuf, newer.offset, newer.length)
+                                                ?: continue
+                                        latest = candidate
+                                    } catch (_: SocketTimeoutException) {
+                                        break
+                                    }
+                                }
+                                onIne1Frame(latest)
                             } catch (_: SocketTimeoutException) {
                                 continue
                             } catch (_: Exception) {
@@ -349,9 +380,10 @@ class RetornoAudioEngine(
         /* Fila no AudioTrack (HAL): com WS a taxa média pode parecer «em dia» mas o DSP leva segundos. */
         val halCapMs =
             when (retornoLatencyProfile) {
-                "pro", "low" -> 130
+                "pro" -> 48
+                "low" -> 72
                 "wifi24" -> 95
-                else -> 220
+                else -> 130
             }
         if (totalReceivedMediaMs > 50.0 && sink.halQueuedMsApprox() > halCapMs) {
             sink.drainPlayoutBuffer()

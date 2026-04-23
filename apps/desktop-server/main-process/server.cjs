@@ -33,6 +33,7 @@ const {
   mixMusicianStereoFromMonoSources,
   migrateShowfile,
   musicianScopeHasValidTarget,
+  syncInterfaceChannels,
   MVP_MAX_INPUTS,
   MVP_MAX_CAPTURE_CHANNELS,
   MVP_SAMPLE_RATE_HZ,
@@ -1462,6 +1463,35 @@ function createServices(app) {
       saveState(userData, state)
     }
   }
+  let lastAutoIfSyncKey = null
+  function showfileLooksLikeInterfaceOnly(sf) {
+    if (!sf || !Array.isArray(sf.channels)) return false
+    if (sf.channels.length === 0) return true
+    return sf.channels.every(
+      (c) =>
+        c &&
+        typeof c.id === 'string' &&
+        (/^if_\d+$/.test(c.id) || c.id === 'if_l' || c.id === 'if_r'),
+    )
+  }
+  function autoSyncInterfaceChannelsIfNeeded(baseName, channelCount) {
+    if (state.captureChannelCountAuto === false) return
+    if (!showfileLooksLikeInterfaceOnly(state.showfile)) return
+    const n = Math.max(1, Math.floor(Number(channelCount) || 0))
+    const name = String(baseName || '').trim() || 'Interface'
+    const key = `${process.platform}|${name}|${n}`
+    if (key === lastAutoIfSyncKey) return
+    const currentIf = state.showfile.channels.filter((c) => /^if_\d+$/.test(c.id))
+    const alreadyAligned =
+      state.showfile.channels.length === n &&
+      currentIf.length === n &&
+      currentIf.every((c) => typeof c.captureInputIndex === 'number' && c.captureInputIndex >= 0)
+    if (!alreadyAligned) {
+      syncInterfaceChannels(state.showfile, { channelCount: n, baseName: name })
+      saveState(userData, state)
+    }
+    lastAutoIfSyncKey = key
+  }
   /** Última listagem DirectShow (diagnóstico quando a lista vem vazia no Windows). */
   let lastWinDshowListDiag = {
     exitCode: /** @type {number | null} */ (null),
@@ -1825,6 +1855,14 @@ function createServices(app) {
   /** Última vez em que havia PCM suficiente do ffmpeg (para /api/session). */
   let lastGoodCaptureMs = 0
 
+  function captureBufferSoftCapBytes(blockSamples, nCh) {
+    const bytesPerFrame = Math.max(1, nCh) * 2
+    const minBlockBytes = Math.max(1, blockSamples) * bytesPerFrame
+    const targetMs = process.platform === 'win32' ? 220 : 120
+    const targetBytes = Math.round((MVP_SAMPLE_RATE_HZ * bytesPerFrame * targetMs) / 1000)
+    return Math.max(minBlockBytes * 4, targetBytes)
+  }
+
   function normalizeCaptureChannelCount() {
     const raw = Math.floor(Number(state.captureChannelCount))
     if (!Number.isFinite(raw) || raw < 1) return 2
@@ -2018,7 +2056,7 @@ function createServices(app) {
 
   function pushCaptureChunk(chunk) {
     captureBuf = Buffer.concat([captureBuf, chunk])
-    const capBytes = 4 * MVP_SAMPLE_RATE_HZ * 4
+    const capBytes = captureBufferSoftCapBytes(audioBlockSamples(), normalizeCaptureChannelCount())
     if (captureBuf.length > capBytes) {
       captureBuf = captureBuf.subarray(captureBuf.length - capBytes)
     }
@@ -2141,6 +2179,7 @@ function createServices(app) {
             }
           }
           const nCh = normalizeCaptureChannelCount()
+          autoSyncInterfaceChannelsIfNeeded(devName, nCh)
           const args = [
             '-nostats',
             '-loglevel',
@@ -2216,6 +2255,19 @@ function createServices(app) {
               }
             }
             const nCh = normalizeCaptureChannelCount()
+            autoSyncInterfaceChannelsIfNeeded(devName, nCh)
+            const audioPinName = String(process.env.INEAR_DSHOW_AUDIO_PIN_NAME || '').trim()
+            const audioDeviceNumberRaw = String(process.env.INEAR_DSHOW_AUDIO_DEVICE_NUMBER || '').trim()
+            const audioDeviceNumber = Number.isFinite(Number(audioDeviceNumberRaw))
+              ? Math.max(0, Math.floor(Number(audioDeviceNumberRaw)))
+              : null
+            const dshowAudioBufferMsRaw = Number(
+              String(process.env.INEAR_DSHOW_AUDIO_BUFFER_MS || '').trim() || '5',
+            )
+            const dshowAudioBufferMs =
+              Number.isFinite(dshowAudioBufferMsRaw) && dshowAudioBufferMsRaw >= 0
+                ? Math.max(0, Math.min(500, Math.floor(dshowAudioBufferMsRaw)))
+                : 20
             const args = [
               '-nostats',
               '-loglevel',
@@ -2224,10 +2276,22 @@ function createServices(app) {
               'nobuffer',
               '-flags',
               'low_delay',
+              '-rtbufsize',
+              '96k',
               '-thread_queue_size',
               '1024',
               '-f',
               'dshow',
+              '-sample_rate',
+              String(MVP_SAMPLE_RATE_HZ),
+              '-sample_size',
+              '16',
+              '-channels',
+              String(nCh),
+              '-audio_buffer_size',
+              String(dshowAudioBufferMs),
+              ...(audioPinName ? ['-audio_pin_name', audioPinName] : []),
+              ...(audioDeviceNumber !== null ? ['-audio_device_number', String(audioDeviceNumber)] : []),
               '-i',
               dshowAudioInputSpecifier(devName),
               '-ar',
@@ -2239,7 +2303,7 @@ function createServices(app) {
               '-',
             ]
             console.info(
-              `[inear] captura do PC (DirectShow ${mode}, "${devName}", ${nCh}ch)`,
+              `[inear] captura do PC (DirectShow ${mode}, "${devName}", ${nCh}ch, audio_buffer_size=${dshowAudioBufferMs}ms)`,
               ffmpeg,
             )
             captureChild = spawn(ffmpeg, args, {
@@ -2277,6 +2341,10 @@ function createServices(app) {
    */
   function takePcmBlock(blockSamples, nCh) {
     const need = blockSamples * nCh * 2
+    const capBytes = captureBufferSoftCapBytes(blockSamples, nCh)
+    if (captureBuf.length > capBytes) {
+      captureBuf = captureBuf.subarray(captureBuf.length - capBytes)
+    }
     if (captureBuf.length < need) return null
     const slice = captureBuf.subarray(0, need)
     captureBuf = captureBuf.subarray(need)
@@ -2330,11 +2398,12 @@ function createServices(app) {
         typeof ch.captureInputIndex === 'number' &&
         Number.isFinite(ch.captureInputIndex)
       ) {
-        const idx = Math.max(
-          0,
-          Math.min(nCh - 1, Math.floor(ch.captureInputIndex)),
-        )
-        out[ch.id] = sampleInput(capBlock, i, nCh, idx) * 0.98
+        const raw = Math.floor(ch.captureInputIndex)
+        if (raw < 0 || raw >= nCh) {
+          out[ch.id] = 0
+        } else {
+          out[ch.id] = sampleInput(capBlock, i, nCh, raw) * 0.98
+        }
         continue
       }
       const L = sampleInput(capBlock, i, nCh, 0)
@@ -3099,71 +3168,7 @@ function createServices(app) {
       (envOn
         ? 'Captura (INEAR_CAPTURE_CMD)'
         : devices[0]?.name || 'Interface')
-    const prevByIndex = new Map()
-    for (const c of state.showfile.channels) {
-      let k = null
-      const mm = /^if_(\d+)$/.exec(c.id)
-      if (mm) k = Number(mm[1])
-      else if (c.id === 'if_l') k = 0
-      else if (c.id === 'if_r') k = 1
-      if (k !== null && k >= 0 && k < n) prevByIndex.set(k, c)
-    }
-    const channels = []
-    for (let k = 0; k < n; k++) {
-      const prev = prevByIndex.get(k)
-      const defName = `Entrada ${k + 1} · ${baseName}`
-      /* Ao sincronizar interface, refletir imediatamente a fonte atual nos nomes. */
-      const name = defName
-      const strip = {
-        id: `if_${k}`,
-        name,
-        icon: typeof prev?.icon === 'string' ? prev.icon : undefined,
-        color: channelAccentColor({
-          id: `if_${k}`,
-          color: typeof prev?.color === 'string' ? prev.color : undefined,
-          captureInputIndex: k,
-        }),
-        gain: typeof prev?.gain === 'number' ? prev.gain : 1,
-        pan: typeof prev?.pan === 'number' ? prev.pan : 0,
-        mute: Boolean(prev?.mute),
-        eq:
-          prev?.eq &&
-          typeof prev.eq.lowDb === 'number' &&
-          typeof prev.eq.midDb === 'number' &&
-          typeof prev.eq.highDb === 'number'
-            ? {
-                lowDb: prev.eq.lowDb,
-                midDb: prev.eq.midDb,
-                highDb: prev.eq.highDb,
-              }
-            : { lowDb: 0, midDb: 0, highDb: 0 },
-        lockEq: Boolean(prev?.lockEq),
-        captureInputIndex: k,
-        sourceTap: k === 0 ? 'L' : k === 1 ? 'R' : undefined,
-      }
-      channels.push(strip)
-    }
-    state.showfile.channels = channels
-    state.showfile.groups = []
-    const ids = channels.map((c) => c.id)
-    for (const m of state.showfile.musicians) {
-      m.scope = { channelIds: [...ids], groupIds: [] }
-      const nextGains = {}
-      const nextMutes = {}
-      for (const id of ids) {
-        nextGains[id] = m.sendGains[id] ?? 1
-        nextMutes[id] = Boolean(m.sendMutes?.[id])
-      }
-      m.sendGains = nextGains
-      m.sendMutes = nextMutes
-      if (!m.eqByChannel) m.eqByChannel = {}
-      const nextEq = {}
-      for (const id of ids) {
-        if (m.eqByChannel[id]) nextEq[id] = m.eqByChannel[id]
-      }
-      m.eqByChannel = nextEq
-    }
-    migrateShowfile(state.showfile)
+    syncInterfaceChannels(state.showfile, { channelCount: n, baseName })
     saveState(userData, state)
     startCaptureIfConfigured()
     res.json({

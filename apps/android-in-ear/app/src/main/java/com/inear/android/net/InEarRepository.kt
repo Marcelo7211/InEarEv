@@ -90,11 +90,24 @@ class InEarRepository(
         }
     }
 
-    suspend fun postTelemetry(apiBase: String, bearer: String, rttMs: Double?, sequenceGaps: Int?) {
+    suspend fun postTelemetry(
+        apiBase: String,
+        bearer: String,
+        rttMs: Double?,
+        sequenceGaps: Int?,
+        estimatedE2eMs: Int?,
+        queueDepth: Int?,
+        aheadMs: Int?,
+        latencyProfile: String?,
+    ) {
         val base = apiBase.trim().trimEnd('/')
         val obj = buildJsonObject {
             if (rttMs != null) put("rttMs", rttMs)
             if (sequenceGaps != null) put("sequenceGaps", sequenceGaps)
+            if (estimatedE2eMs != null) put("estimatedE2eMs", estimatedE2eMs)
+            if (queueDepth != null) put("queueDepth", queueDepth)
+            if (aheadMs != null) put("aheadMs", aheadMs)
+            if (!latencyProfile.isNullOrBlank()) put("latencyProfile", latencyProfile)
         }
         val body = apiJson.encodeToString(obj).toRequestBody(jsonMedia)
         val req = Request.Builder()

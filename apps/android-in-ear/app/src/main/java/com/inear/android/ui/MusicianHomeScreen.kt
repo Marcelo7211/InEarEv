@@ -124,7 +124,7 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
     LaunchedEffect(playing) {
         while (playing) {
             delay(5000)
-            vm.postTelemetry(null, vm.audioEngine.stats.value.sequenceGaps)
+            vm.postTelemetry(null, vm.audioEngine.stats.value)
         }
     }
 

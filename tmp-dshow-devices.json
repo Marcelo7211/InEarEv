@@ -1,0 +1,68 @@
+{
+  "platform": "win32",
+  "ffmpegFound": true,
+  "usingBundledWinFfmpeg": true,
+  "ffprobeFound": true,
+  "devices": [
+    {
+      "index": 0,
+      "name": "Microfone (STUDIO M)",
+      "inputChannels": 2,
+      "probeError": null,
+      "dshowOptionsTail": "[in#0 @ 0000018861428380] DirectShow audio only device options (from audio devices)\n[in#0 @ 0000018861428380]  Pin \"Capture\" (alternative pin name \"Capture\")\n[in#0 @ 0000018861428380]   ch= 2, bits=16, rate= 44100\n    Last message repeated 1 times\n[in#0 @ 0000018861428380]   ch= 1, bits=16, rate= 44100\n[in#0 @ 0000018861428380]   ch= 2, bits=16, rate= 32000\n[in#0 @ 0000018861428380]   ch= 1, bits=16, rate= 32000\n[in#0 @ 0000018861428380]   ch= 2, bits=16, rate= 22050\n[in#0 @ 0000018861428380]   ch= 1, bits=16, rate= 22050\n[in#0 @ 0000018861428380]   ch= 2, bits=16, rate= 11025\n[in#0 @ 0000018861428380]   ch= 1, bits=16, rate= 11025\n[in#0 @ 0000018861428380]   ch= 2, bits=16, rate=  8000\n[in#0 @ 0000018861428380]   ch= 1, bits=16, rate=  8000\n[in#0 @ 0000018861428380]   ch= 2, bits= 8, rate= 44100\n[in#0 @ 0000018861428380]   ch= 1, bits= 8, rate= 44100\n[in#0 @ 0000018861428380]   ch= 2, bits= 8, rate= 22050\n[in#0 @ 0000018861428380]   ch= 1, bits= 8, rate= 22050\n[in#0 @ 0000018861428380]   ch= 2, bits= 8, rate= 11025\n[in#0 @ 0000018861428380]   ch= 1, bits= 8, rate= 11025\n[in#0 @ 0000018861428380]   ch= 2, bits= 8, rate=  8000\n[in#0 @ 0000018861428380]   ch= 1, bits= 8, rate=  8000\n[in#0 @ 0000018861428380]   ch= 2, bits=16, rate= 48000\n[in#0 @ 0000018861428380]   ch= 1, bits=16, rate= 48000\n[in#0 @ 0000018861428380]   ch= 2, bits=16, rate= 96000\n[in#0 @ 0000018861428380]   ch= 1, bits=16, rate= 96000\nError opening input file audio=Microfone (STUDIO M)."
+    },
+    {
+      "index": 1,
+      "name": "Microfone (DroidCam Virtual Audio)",
+      "inputChannels": 2,
+      "probeError": null,
+      "dshowOptionsTail": "[in#0 @ 0000022f781e8400] DirectShow audio only device options (from audio devices)\n[in#0 @ 0000022f781e8400]  Pin \"Capture\" (alternative pin name \"Capture\")\n[in#0 @ 0000022f781e8400]   ch= 2, bits=16, rate= 44100\n    Last message repeated 1 times\n[in#0 @ 0000022f781e8400]   ch= 1, bits=16, rate= 44100\n[in#0 @ 0000022f781e8400]   ch= 2, bits=16, rate= 32000\n[in#0 @ 0000022f781e8400]   ch= 1, bits=16, rate= 32000\n[in#0 @ 0000022f781e8400]   ch= 2, bits=16, rate= 22050\n[in#0 @ 0000022f781e8400]   ch= 1, bits=16, rate= 22050\n[in#0 @ 0000022f781e8400]   ch= 2, bits=16, rate= 11025\n[in#0 @ 0000022f781e8400]   ch= 1, bits=16, rate= 11025\n[in#0 @ 0000022f781e8400]   ch= 2, bits=16, rate=  8000\n[in#0 @ 0000022f781e8400]   ch= 1, bits=16, rate=  8000\n[in#0 @ 0000022f781e8400]   ch= 2, bits= 8, rate= 44100\n[in#0 @ 0000022f781e8400]   ch= 1, bits= 8, rate= 44100\n[in#0 @ 0000022f781e8400]   ch= 2, bits= 8, rate= 22050\n[in#0 @ 0000022f781e8400]   ch= 1, bits= 8, rate= 22050\n[in#0 @ 0000022f781e8400]   ch= 2, bits= 8, rate= 11025\n[in#0 @ 0000022f781e8400]   ch= 1, bits= 8, rate= 11025\n[in#0 @ 0000022f781e8400]   ch= 2, bits= 8, rate=  8000\n[in#0 @ 0000022f781e8400]   ch= 1, bits= 8, rate=  8000\n[in#0 @ 0000022f781e8400]   ch= 2, bits=16, rate= 48000\n[in#0 @ 0000022f781e8400]   ch= 1, bits=16, rate= 48000\n[in#0 @ 0000022f781e8400]   ch= 2, bits=16, rate= 96000\n[in#0 @ 0000022f781e8400]   ch= 1, bits=16, rate= 96000\nError opening input file audio=Microfone (DroidCam Virtual Audio)."
+    },
+    {
+      "index": 2,
+      "name": "Microfone (DroidCam Audio)",
+      "inputChannels": 2,
+      "probeError": null,
+      "dshowOptionsTail": "[in#0 @ 00000249a2f58400] DirectShow audio only device options (from audio devices)\n[in#0 @ 00000249a2f58400]  Pin \"Capture\" (alternative pin name \"Capture\")\n[in#0 @ 00000249a2f58400]   ch= 2, bits=16, rate= 44100\n    Last message repeated 1 times\n[in#0 @ 00000249a2f58400]   ch= 1, bits=16, rate= 44100\n[in#0 @ 00000249a2f58400]   ch= 2, bits=16, rate= 32000\n[in#0 @ 00000249a2f58400]   ch= 1, bits=16, rate= 32000\n[in#0 @ 00000249a2f58400]   ch= 2, bits=16, rate= 22050\n[in#0 @ 00000249a2f58400]   ch= 1, bits=16, rate= 22050\n[in#0 @ 00000249a2f58400]   ch= 2, bits=16, rate= 11025\n[in#0 @ 00000249a2f58400]   ch= 1, bits=16, rate= 11025\n[in#0 @ 00000249a2f58400]   ch= 2, bits=16, rate=  8000\n[in#0 @ 00000249a2f58400]   ch= 1, bits=16, rate=  8000\n[in#0 @ 00000249a2f58400]   ch= 2, bits= 8, rate= 44100\n[in#0 @ 00000249a2f58400]   ch= 1, bits= 8, rate= 44100\n[in#0 @ 00000249a2f58400]   ch= 2, bits= 8, rate= 22050\n[in#0 @ 00000249a2f58400]   ch= 1, bits= 8, rate= 22050\n[in#0 @ 00000249a2f58400]   ch= 2, bits= 8, rate= 11025\n[in#0 @ 00000249a2f58400]   ch= 1, bits= 8, rate= 11025\n[in#0 @ 00000249a2f58400]   ch= 2, bits= 8, rate=  8000\n[in#0 @ 00000249a2f58400]   ch= 1, bits= 8, rate=  8000\n[in#0 @ 00000249a2f58400]   ch= 2, bits=16, rate= 48000\n[in#0 @ 00000249a2f58400]   ch= 1, bits=16, rate= 48000\n[in#0 @ 00000249a2f58400]   ch= 2, bits=16, rate= 96000\n[in#0 @ 00000249a2f58400]   ch= 1, bits=16, rate= 96000\nError opening input file audio=Microfone (DroidCam Audio)."
+    },
+    {
+      "index": 3,
+      "name": "Microfone (GENERAL WEBCAM)",
+      "inputChannels": 2,
+      "probeError": null,
+      "dshowOptionsTail": "[in#0 @ 000001c0297583c0] DirectShow audio only device options (from audio devices)\n[in#0 @ 000001c0297583c0]  Pin \"Capture\" (alternative pin name \"Capture\")\n[in#0 @ 000001c0297583c0]   ch= 2, bits=16, rate= 44100\n    Last message repeated 1 times\n[in#0 @ 000001c0297583c0]   ch= 1, bits=16, rate= 44100\n[in#0 @ 000001c0297583c0]   ch= 2, bits=16, rate= 32000\n[in#0 @ 000001c0297583c0]   ch= 1, bits=16, rate= 32000\n[in#0 @ 000001c0297583c0]   ch= 2, bits=16, rate= 22050\n[in#0 @ 000001c0297583c0]   ch= 1, bits=16, rate= 22050\n[in#0 @ 000001c0297583c0]   ch= 2, bits=16, rate= 11025\n[in#0 @ 000001c0297583c0]   ch= 1, bits=16, rate= 11025\n[in#0 @ 000001c0297583c0]   ch= 2, bits=16, rate=  8000\n[in#0 @ 000001c0297583c0]   ch= 1, bits=16, rate=  8000\n[in#0 @ 000001c0297583c0]   ch= 2, bits= 8, rate= 44100\n[in#0 @ 000001c0297583c0]   ch= 1, bits= 8, rate= 44100\n[in#0 @ 000001c0297583c0]   ch= 2, bits= 8, rate= 22050\n[in#0 @ 000001c0297583c0]   ch= 1, bits= 8, rate= 22050\n[in#0 @ 000001c0297583c0]   ch= 2, bits= 8, rate= 11025\n[in#0 @ 000001c0297583c0]   ch= 1, bits= 8, rate= 11025\n[in#0 @ 000001c0297583c0]   ch= 2, bits= 8, rate=  8000\n[in#0 @ 000001c0297583c0]   ch= 1, bits= 8, rate=  8000\n[in#0 @ 000001c0297583c0]   ch= 2, bits=16, rate= 48000\n[in#0 @ 000001c0297583c0]   ch= 1, bits=16, rate= 48000\n[in#0 @ 000001c0297583c0]   ch= 2, bits=16, rate= 96000\n[in#0 @ 000001c0297583c0]   ch= 1, bits=16, rate= 96000\nError opening input file audio=Microfone (GENERAL WEBCAM)."
+    }
+  ],
+  "captureSource": "dshow",
+  "captureMode": "auto",
+  "manualAvfoundationAudioIndex": null,
+  "effectiveAvfoundationAudioIndex": 0,
+  "effectiveDeviceName": "Microfone (STUDIO M)",
+  "autoPicked": true,
+  "suggestedDevice": {
+    "index": 0,
+    "name": "Microfone (STUDIO M)"
+  },
+  "effectiveProbedInputChannels": 2,
+  "effectiveProbeError": null,
+  "captureChannelCount": 2,
+  "captureChannelCountAuto": true,
+  "captureInputMatrix": {
+    "gainL": 1,
+    "gainR": 1,
+    "assign": {},
+    "gainByIndex": {}
+  },
+  "mixerChannels": [
+    {
+      "id": "if_0",
+      "name": "Entrada 1 · Microfone (STUDIO M)",
+      "captureInputIndex": 0
+    },
+    {
+      "id": "if_1",
+      "name": "Entrada 2 · Microfone (STUDIO M)",
+      "captureInputIndex": 1
+    }
+  ]
+}

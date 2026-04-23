@@ -1,3 +1,5 @@
+import { channelAccentColor } from './channelVisuals.js'
+
 export type WifiNetworkProfile = 'wifi_2_4' | 'wifi_5' | 'auto'
 
 /** Origem mono no PCM estéreo da captura (MVP: L/R/soma). */
@@ -245,4 +247,78 @@ export function defaultShowfile(): Showfile {
       },
     ],
   }
+}
+
+export function syncInterfaceChannels(
+  sf: Showfile,
+  params: { channelCount: number; baseName: string },
+): Showfile {
+  const n = Math.max(1, Math.floor(Number(params.channelCount) || 0))
+  const baseName = String(params.baseName || '').trim() || 'Interface'
+
+  const prevByIndex = new Map<number, ChannelStrip>()
+  for (const c of sf.channels) {
+    let k: number | null = null
+    const mm = /^if_(\d+)$/.exec(c.id)
+    if (mm) k = Number(mm[1])
+    else if (c.id === 'if_l') k = 0
+    else if (c.id === 'if_r') k = 1
+    if (k !== null && k >= 0 && k < n) prevByIndex.set(k, c)
+  }
+
+  const channels: ChannelStrip[] = []
+  for (let k = 0; k < n; k++) {
+    const prev = prevByIndex.get(k)
+    const name = `Entrada ${k + 1} · ${baseName}`
+    channels.push({
+      id: `if_${k}`,
+      name,
+      icon: typeof prev?.icon === 'string' ? prev.icon : undefined,
+      color: channelAccentColor({
+        id: `if_${k}`,
+        color: typeof prev?.color === 'string' ? prev.color : undefined,
+        captureInputIndex: k,
+      }),
+      gain: typeof prev?.gain === 'number' ? prev.gain : 1,
+      pan: typeof prev?.pan === 'number' ? prev.pan : 0,
+      mute: Boolean(prev?.mute),
+      eq:
+        prev?.eq &&
+        typeof prev.eq.lowDb === 'number' &&
+        typeof prev.eq.midDb === 'number' &&
+        typeof prev.eq.highDb === 'number'
+          ? {
+              lowDb: prev.eq.lowDb,
+              midDb: prev.eq.midDb,
+              highDb: prev.eq.highDb,
+            }
+          : emptyEq(),
+      lockEq: Boolean(prev?.lockEq),
+      captureInputIndex: k,
+      sourceTap: k === 0 ? 'L' : k === 1 ? 'R' : undefined,
+    })
+  }
+
+  sf.channels = channels
+  sf.groups = []
+  const ids = channels.map((c) => c.id)
+  for (const m of sf.musicians) {
+    m.scope = { channelIds: [...ids], groupIds: [] }
+    const nextGains: Record<string, number> = {}
+    const nextMutes: Record<string, boolean> = {}
+    for (const id of ids) {
+      nextGains[id] = m.sendGains[id] ?? 1
+      nextMutes[id] = Boolean(m.sendMutes?.[id])
+    }
+    m.sendGains = nextGains
+    m.sendMutes = nextMutes
+    if (!m.eqByChannel) m.eqByChannel = {}
+    const nextEq: Record<string, Eq3> = {}
+    for (const id of ids) {
+      if (m.eqByChannel[id]) nextEq[id] = m.eqByChannel[id]!
+    }
+    m.eqByChannel = nextEq
+  }
+
+  return migrateShowfile(sf)
 }

@@ -55,27 +55,27 @@ class PcmAudioTrackSink(private val sampleRate: Int = 48_000) {
             val useLowLatencyHardware: Boolean
             when (latencyProfile) {
                 "pro" -> {
-                    maxQueuedAudioMs = 72
-                    maxQueuedFramesCap = 5
-                    bufBytes = (minBuf * 2).coerceAtLeast(minBuf)
+                    maxQueuedAudioMs = 42
+                    maxQueuedFramesCap = 3
+                    bufBytes = minBuf
                     useLowLatencyHardware = true
-                    writerWaitMs = 5L
+                    writerWaitMs = 3L
                 }
                 "low" -> {
-                    maxQueuedAudioMs = 55
+                    maxQueuedAudioMs = 64
                     maxQueuedFramesCap = 4
-                    bufBytes = (minBuf * 2).coerceAtLeast(minBuf)
+                    bufBytes = minBuf
                     useLowLatencyHardware = true
-                    writerWaitMs = 5L
+                    writerWaitMs = 3L
                 }
                 "wifi24" -> {
-                    maxQueuedAudioMs = 48
-                    maxQueuedFramesCap = 4
+                    maxQueuedAudioMs = 96
+                    maxQueuedFramesCap = 6
                     /* Buffer HAL o mais pequeno possível: em 2,4 GHz o TCP pode manter taxa média
                      * correcta com segundos no buffer do DSP — o motor usa halQueueMsApprox para drenar. */
                     bufBytes = minBuf
                     useLowLatencyHardware = true
-                    writerWaitMs = 5L
+                    writerWaitMs = 3L
                 }
                 else -> {
                     maxQueuedAudioMs = 220

@@ -266,16 +266,16 @@ export function buildStreamRetornoPlayerHtml(
       ? {
           name: '5-pro',
           transport: 'pro',
-          margin: 0.008,
-          maxAhead: 0.028,
-          maxRawFrames: 4,
-          latencyHint: 0.008,
-          adaptiveMax: 0.016,
-          dropGrow: 0.001,
-          underrunGrow: 0.0015,
+          margin: 0.012,
+          maxAhead: 0.04,
+          maxRawFrames: 5,
+          latencyHint: 0.012,
+          adaptiveMax: 0.024,
+          dropGrow: 0.00125,
+          underrunGrow: 0.002,
           lowpassHz: 18200,
           highpassHz: 34,
-          burstFast: 6,
+          burstFast: 5,
           burstSafe: 3,
           telemetryMs: 1000
         }
@@ -316,16 +316,16 @@ export function buildStreamRetornoPlayerHtml(
         : {
             name: '5',
             transport: 'low',
-            margin: 0.014,
-            maxAhead: 0.065,
-            maxRawFrames: 8,
-            latencyHint: 0.015,
-            adaptiveMax: 0.028,
-            dropGrow: 0.0015,
-            underrunGrow: 0.0025,
+            margin: 0.022,
+            maxAhead: 0.09,
+            maxRawFrames: 10,
+            latencyHint: 0.022,
+            adaptiveMax: 0.04,
+            dropGrow: 0.002,
+            underrunGrow: 0.003,
             lowpassHz: 17200,
             highpassHz: 36,
-            burstFast: 4,
+            burstFast: 5,
             burstSafe: 2,
             telemetryMs: 2000
           };
@@ -378,6 +378,9 @@ export function buildStreamRetornoPlayerHtml(
   var estimatedE2ePeakMs = 0;
   var slaOver1s = 0;
   var slowSampleStreak = 0;
+  var playStartErrors = 0;
+  var lastPlayError = '';
+  var lastCtxState = '';
   var TELEMETRY = ${injectedTelemetry};
   var teleTimer = null;
   var reconnectAttempt = 0;
@@ -497,6 +500,12 @@ export function buildStreamRetornoPlayerHtml(
     nextPlayTime = ctx.currentTime + marginSec();
   }
 
+  function setStatusText(msg) {
+    try {
+      if (st) st.textContent = msg;
+    } catch (_) {}
+  }
+
   function estimateE2eLatencyMs(aheadMs) {
     var serverBlockMs = helloInfo.blockSamples
       ? (helloInfo.blockSamples / SR_IN) * 1000
@@ -561,6 +570,10 @@ export function buildStreamRetornoPlayerHtml(
     try {
       src.start(nextPlayTime);
     } catch (e) {
+      playStartErrors++;
+      lastPlayError = String(e && e.message ? e.message : e);
+      setStatusText('Áudio: falha ao iniciar buffer (' + playStartErrors + ') — ' + lastPlayError);
+      recoverPlaybackClock();
       return;
     }
     nextPlayTime += buf.duration;
@@ -683,6 +696,12 @@ export function buildStreamRetornoPlayerHtml(
 
   function tick() {
     if (ctx) {
+      if (ctx.state !== lastCtxState) {
+        lastCtxState = ctx.state;
+        if (ctx.state === 'suspended') {
+          setStatusText('Áudio: suspenso (toque/clique para retomar)');
+        }
+      }
       if (analyserL && analyserR && meterTimeDataL && meterTimeDataR) {
         analyserL.getFloatTimeDomainData(meterTimeDataL);
         analyserR.getFloatTimeDomainData(meterTimeDataR);
@@ -887,6 +906,16 @@ export function buildStreamRetornoPlayerHtml(
     } catch (e1) {
       ctx = new (window.AudioContext || window.webkitAudioContext)();
     }
+    var tryResume = function () {
+      try {
+        if (!ctx) return;
+        if (ctx.state === 'running') return;
+        ctx.resume().catch(function (_) {});
+      } catch (_) {}
+    };
+    document.addEventListener('touchstart', tryResume, { passive: true });
+    document.addEventListener('mousedown', tryResume, { passive: true });
+    document.addEventListener('keydown', tryResume, { passive: true });
     outSr = ctx.sampleRate;
     masterGainNode = ctx.createGain();
     masterGainNode.gain.value = pendingMaster;
