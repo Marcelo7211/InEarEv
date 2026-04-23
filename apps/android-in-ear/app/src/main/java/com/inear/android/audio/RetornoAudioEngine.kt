@@ -440,7 +440,12 @@ class RetornoAudioEngine(
         val mediaIndex = lines.indexOfFirst { it.startsWith("m=audio ") }
         if (mediaIndex == -1) return sdp
         val mediaEndExclusive =
-            lines.indexOfFirst(mediaIndex + 1) { it.startsWith("m=") }.let { if (it == -1) lines.size else it }
+            lines
+                .subList(mediaIndex + 1, lines.size)
+                .indexOfFirst { it.startsWith("m=") }
+                .let { nextMediaOffset ->
+                    if (nextMediaOffset == -1) lines.size else mediaIndex + 1 + nextMediaOffset
+                }
         val section = lines.subList(mediaIndex, mediaEndExclusive).toMutableList()
         val fmtpIndex = section.indexOfFirst { it.startsWith("a=fmtp:$opusPayload ") }
         val tunedFmtp = buildOpusFmtpLine(opusPayload, section.getOrNull(fmtpIndex), desiredPtime, latency)
