@@ -62,11 +62,11 @@ class PcmAudioTrackSink(private val sampleRate: Int = 48_000) {
                     writerWaitMs = 4L
                 }
                 "pro" -> {
-                    maxQueuedAudioMs = 42
-                    maxQueuedFramesCap = 3
+                    maxQueuedAudioMs = 34
+                    maxQueuedFramesCap = 2
                     bufBytes = minBuf
                     useLowLatencyHardware = true
-                    writerWaitMs = 3L
+                    writerWaitMs = 2L
                 }
                 "low" -> {
                     maxQueuedAudioMs = 64
