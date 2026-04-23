@@ -2980,6 +2980,7 @@ function createServices(app) {
     }
     const body = req.body || {}
     const sdp = typeof body.sdp === 'string' ? body.sdp : ''
+    const latencyProfile = normalizeLatencyProfile(body.latencyProfile)
     if (!sdp) {
       return res.status(400).json({ error: 'invalid_offer' })
     }
@@ -2995,9 +2996,17 @@ function createServices(app) {
           disposeWebRtcSession(sessionId)
         }
       }
-      await pc.setRemoteDescription(new wrtc.RTCSessionDescription({ type: 'offer', sdp }))
+      await pc.setRemoteDescription(
+        new wrtc.RTCSessionDescription({
+          type: 'offer',
+          sdp: tuneWebRtcAudioSdp(sdp, latencyProfile),
+        }),
+      )
       const answer = await pc.createAnswer()
-      await pc.setLocalDescription(answer)
+      await pc.setLocalDescription({
+        type: 'answer',
+        sdp: tuneWebRtcAudioSdp(answer && answer.sdp ? answer.sdp : '', latencyProfile),
+      })
       await waitIceGatheringComplete(pc, 350)
       webrtcSessions.set(sessionId, { id: strip.id, pc, source, track })
       let bucket = webrtcSessionsByMusician.get(strip.id)
@@ -3410,6 +3419,20 @@ function createServices(app) {
   })
 
   const httpServer = http.createServer(ex)
+  function notifyServiceError(kind, port, err) {
+    const payload = {
+      kind,
+      port,
+      code: err && err.code ? String(err.code) : '',
+      message: err && err.message ? String(err.message) : String(err),
+    }
+    console.error('[inear] bind falhou:', payload)
+    try {
+      app.emit('inear:service-error', payload)
+    } catch {
+      /* ignore */
+    }
+  }
   httpServer.on('connection', (socket) => {
     try {
       socket.setNoDelay(true)
@@ -3417,6 +3440,9 @@ function createServices(app) {
     } catch {
       /* ignore */
     }
+  })
+  httpServer.on('error', (err) => {
+    notifyServiceError('http', HTTP_PORT, err)
   })
   const { WebSocketServer } = require('ws')
   const wss = new WebSocketServer({
@@ -3485,8 +3511,67 @@ function createServices(app) {
       }
     })
   }
+  function tuneWebRtcAudioSdp(sdp, latencyProfile = 'pro') {
+    const raw = String(sdp || '')
+    if (!raw.trim()) return raw
+    const desiredPtime = latencyProfile === 'wifi24' || latencyProfile === 'mid200' ? 20 : 10
+    const lines = raw.replace(/\r\n/g, '\n').split('\n')
+    const mediaIndex = lines.findIndex((line) => line.startsWith('m=audio '))
+    if (mediaIndex === -1) return raw
+    let mediaEnd = lines.findIndex((line, idx) => idx > mediaIndex && line.startsWith('m='))
+    if (mediaEnd === -1) mediaEnd = lines.length
+    const opusMap = lines
+      .slice(mediaIndex, mediaEnd)
+      .map((line) => /^\s*a=rtpmap:(\d+)\s+opus\/48000\/2\s*$/i.exec(line))
+      .find(Boolean)
+    const opusPayload = opusMap ? opusMap[1] : null
+    if (!opusPayload) return raw
+    const section = lines.slice(mediaIndex, mediaEnd)
+    const fmtpIdx = section.findIndex((line) => line.startsWith(`a=fmtp:${opusPayload} `))
+    const tunedFmtp = buildWebRtcOpusFmtp(opusPayload, fmtpIdx >= 0 ? section[fmtpIdx] : '', desiredPtime, latencyProfile)
+    if (fmtpIdx >= 0) section[fmtpIdx] = tunedFmtp
+    else section.push(tunedFmtp)
+    upsertSdpSectionLine(section, 'a=ptime:', `a=ptime:${desiredPtime}`)
+    upsertSdpSectionLine(section, 'a=maxptime:', `a=maxptime:${desiredPtime}`)
+    const merged = [...lines.slice(0, mediaIndex), ...section, ...lines.slice(mediaEnd)]
+    return `${merged.join('\r\n').trim()}\r\n`
+  }
+  function buildWebRtcOpusFmtp(payload, currentLine, desiredPtime, latencyProfile = 'pro') {
+    const params = new Map()
+    String(currentLine || '')
+      .replace(new RegExp(`^a=fmtp:${payload}\\s+`), '')
+      .split(';')
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .forEach((kv) => {
+        const idx = kv.indexOf('=')
+        if (idx <= 0) return
+        params.set(kv.slice(0, idx).trim(), kv.slice(idx + 1).trim())
+      })
+    params.set('minptime', String(desiredPtime))
+    params.set('ptime', String(desiredPtime))
+    params.set('maxptime', String(desiredPtime))
+    params.set('stereo', '1')
+    params.set('sprop-stereo', '1')
+    params.set('maxplaybackrate', String(MVP_SAMPLE_RATE_HZ))
+    params.set('usedtx', '0')
+    params.set('useinbandfec', latencyProfile === 'pro' ? '0' : '1')
+    params.set('cbr', latencyProfile === 'pro' ? '1' : params.get('cbr') || '0')
+    params.set('x-google-min-bitrate', latencyProfile === 'pro' ? '128' : '96')
+    params.set('x-google-start-bitrate', latencyProfile === 'pro' ? '160' : '128')
+    params.set('x-google-max-bitrate', latencyProfile === 'pro' ? '192' : '160')
+    return `a=fmtp:${payload} ${Array.from(params.entries())
+      .map(([k, v]) => `${k}=${v}`)
+      .join(';')}`
+  }
+  function upsertSdpSectionLine(section, prefix, replacement) {
+    const idx = section.findIndex((line) => line.startsWith(prefix))
+    if (idx >= 0) section[idx] = replacement
+    else section.push(replacement)
+  }
   function normalizeLatencyProfile(input) {
     if (input === 'pro' || input === 'low' || input === 'wifi24') return input
+    if (input === 'mid200') return input
     return 'stable'
   }
   function preferredWireCodecForProfile(profile) {
@@ -3609,11 +3694,17 @@ function createServices(app) {
   })
 
   const audioSock = dgram.createSocket('udp4')
+  audioSock.on('error', (err) => {
+    notifyServiceError('udp-audio', UDP_AUDIO_PORT, err)
+  })
   audioSock.bind(UDP_AUDIO_PORT, () => {
     console.info(`[inear] UDP áudio :${UDP_AUDIO_PORT}`)
   })
 
   const controlSock = dgram.createSocket('udp4')
+  controlSock.on('error', (err) => {
+    notifyServiceError('udp-control', UDP_CONTROL_PORT, err)
+  })
   controlSock.bind(UDP_CONTROL_PORT, () => {
     console.info(`[inear] UDP controle :${UDP_CONTROL_PORT}`)
   })

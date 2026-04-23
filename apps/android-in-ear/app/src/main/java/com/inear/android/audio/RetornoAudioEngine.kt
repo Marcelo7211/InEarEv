@@ -133,7 +133,7 @@ class RetornoAudioEngine(
         val factory = ensurePeerConnectionFactory()
         val pc =
             factory.createPeerConnection(
-                PeerConnection.RTCConfiguration(emptyList()),
+                buildRtcConfig(retornoLatencyProfile),
                 createPeerConnectionObserver(iceGatheringDone),
             ) ?: error("Falha ao criar PeerConnection WebRTC")
         peerConnection = pc
@@ -150,14 +150,24 @@ class RetornoAudioEngine(
                     mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
                 },
             )
-        setLocalDescriptionBlocking(pc, offer)
+        val tunedOffer =
+            SessionDescription(
+                offer.type,
+                tuneAudioSdpForLatency(offer.description, retornoLatencyProfile),
+            )
+        setLocalDescriptionBlocking(pc, tunedOffer)
         iceGatheringDone.await(1200, TimeUnit.MILLISECONDS)
-        val localSdp = pc.localDescription?.description ?: offer.description
-        val answer = repository.createWebRtcAnswer(apiBase, token, localSdp)
+        val localSdp = pc.localDescription?.description ?: tunedOffer.description
+        val answer = repository.createWebRtcAnswer(apiBase, token, localSdp, retornoLatencyProfile)
         if (!running) return
+        val tunedAnswer =
+            SessionDescription(
+                SessionDescription.Type.ANSWER,
+                tuneAudioSdpForLatency(answer.sdp, retornoLatencyProfile),
+            )
         setRemoteDescriptionBlocking(
             pc,
-            SessionDescription(SessionDescription.Type.ANSWER, answer.sdp),
+            tunedAnswer,
         )
         updateStats(
             transport = "webrtc",
@@ -319,11 +329,11 @@ class RetornoAudioEngine(
 
     private fun targetLatencyMs(latency: String): Int =
         when (latency) {
-            "pro" -> 90
-            "low" -> 130
+            "pro" -> 40
+            "low" -> 80
             "wifi24" -> 180
             "mid200" -> 200
-            else -> 220
+            else -> 120
         }
 
     private fun configureAudioRouteForRetorno() {
@@ -333,6 +343,8 @@ class RetornoAudioEngine(
         try {
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
             audioManager.isSpeakerphoneOn = false
+            @Suppress("DEPRECATION")
+            runCatching { audioManager.isBluetoothScoOn = false }
             audioManager.isMicrophoneMute = false
         } catch (_: Exception) {
         }
@@ -345,6 +357,11 @@ class RetornoAudioEngine(
         }
         try {
             previousSpeakerphone?.let { audioManager.isSpeakerphoneOn = it }
+        } catch (_: Exception) {
+        }
+        try {
+            @Suppress("DEPRECATION")
+            runCatching { audioManager.isBluetoothScoOn = false }
         } catch (_: Exception) {
         }
         try {
@@ -374,6 +391,99 @@ class RetornoAudioEngine(
             peerConnectionFactory = created
             return created
         }
+    }
+
+    private fun buildRtcConfig(latency: String): PeerConnection.RTCConfiguration {
+        val cfg = PeerConnection.RTCConfiguration(emptyList())
+        cfg.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+        cfg.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
+        cfg.rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
+        cfg.tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED
+        cfg.continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
+        cfg.audioJitterBufferFastAccelerate = true
+        cfg.audioJitterBufferMaxPackets = maxJitterPacketsForLatency(latency)
+        return cfg
+    }
+
+    private fun maxJitterPacketsForLatency(latency: String): Int =
+        when (latency) {
+            "pro" -> 4
+            "low" -> 6
+            "wifi24" -> 12
+            "mid200" -> 14
+            else -> 8
+        }
+
+    private fun tuneAudioSdpForLatency(sdp: String, latency: String): String {
+        if (sdp.isBlank()) return sdp
+        val desiredPtime =
+            when (latency) {
+                "pro" -> 10
+                "low" -> 10
+                "wifi24" -> 20
+                "mid200" -> 20
+                else -> 10
+            }
+        val lines = sdp.replace("\r\n", "\n").split('\n').toMutableList()
+        val opusPayload = lines.firstNotNullOfOrNull { line ->
+            Regex("""^a=rtpmap:(\d+)\s+opus/48000/2$""", RegexOption.IGNORE_CASE)
+                .find(line.trim())
+                ?.groupValues
+                ?.getOrNull(1)
+        } ?: return sdp
+        val mediaIndex = lines.indexOfFirst { it.startsWith("m=audio ") }
+        if (mediaIndex == -1) return sdp
+        val mediaEndExclusive =
+            lines.indexOfFirst(mediaIndex + 1) { it.startsWith("m=") }.let { if (it == -1) lines.size else it }
+        val section = lines.subList(mediaIndex, mediaEndExclusive).toMutableList()
+        val fmtpIndex = section.indexOfFirst { it.startsWith("a=fmtp:$opusPayload ") }
+        val tunedFmtp = buildOpusFmtpLine(opusPayload, section.getOrNull(fmtpIndex), desiredPtime, latency)
+        if (fmtpIndex >= 0) {
+            section[fmtpIndex] = tunedFmtp
+        } else {
+            section.add(tunedFmtp)
+        }
+        upsertSdpLine(section, "a=ptime:", "a=ptime:$desiredPtime")
+        upsertSdpLine(section, "a=maxptime:", "a=maxptime:$desiredPtime")
+        lines.subList(mediaIndex, mediaEndExclusive).clear()
+        lines.addAll(mediaIndex, section)
+        return lines.joinToString("\r\n").trimEnd() + "\r\n"
+    }
+
+    private fun buildOpusFmtpLine(
+        opusPayload: String,
+        currentLine: String?,
+        desiredPtime: Int,
+        latency: String,
+    ): String {
+        val params = linkedMapOf<String, String>()
+        currentLine
+            ?.substringAfter(' ', "")
+            ?.split(';')
+            ?.map { it.trim() }
+            ?.filter { it.contains('=') }
+            ?.forEach { kv ->
+                val parts = kv.split('=', limit = 2)
+                params[parts[0].trim()] = parts[1].trim()
+            }
+        params["minptime"] = desiredPtime.toString()
+        params["ptime"] = desiredPtime.toString()
+        params["maxptime"] = desiredPtime.toString()
+        params["stereo"] = "1"
+        params["sprop-stereo"] = "1"
+        params["maxplaybackrate"] = SAMPLE_RATE.toString()
+        params["useinbandfec"] = if (latency == "pro") "0" else "1"
+        params["usedtx"] = "0"
+        params["cbr"] = if (latency == "pro") "1" else params["cbr"] ?: "0"
+        params["x-google-min-bitrate"] = if (latency == "pro") "128" else "96"
+        params["x-google-start-bitrate"] = if (latency == "pro") "160" else "128"
+        params["x-google-max-bitrate"] = if (latency == "pro") "192" else "160"
+        return "a=fmtp:$opusPayload " + params.entries.joinToString(";") { "${it.key}=${it.value}" }
+    }
+
+    private fun upsertSdpLine(lines: MutableList<String>, prefix: String, replacement: String) {
+        val idx = lines.indexOfFirst { it.startsWith(prefix) }
+        if (idx >= 0) lines[idx] = replacement else lines.add(replacement)
     }
 
     private fun createOfferBlocking(

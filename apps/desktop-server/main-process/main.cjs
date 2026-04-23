@@ -1,9 +1,14 @@
-const { app, BrowserWindow, ipcMain, systemPreferences, session } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, systemPreferences, session } = require('electron')
 const path = require('path')
 const os = require('os')
 
 /** Pasta %APPDATA%\\inEar Desktop (alinha com NSIS e documentação). */
 app.setName('inEar Desktop')
+
+const singleInstanceLock = app.requestSingleInstanceLock()
+if (!singleInstanceLock) {
+  app.quit()
+}
 
 // Windows: evita edge cases IPv6 (::1) e instabilidade do stack com "localhost" no Chromium.
 if (process.platform === 'win32') {
@@ -22,6 +27,30 @@ if (process.platform === 'win32') {
 let services
 /** Última janela principal (para IPC e getUserMedia). */
 let mainWindowRef = null
+
+function focusMainWindow() {
+  const win = mainWindowRef
+  if (!win || win.isDestroyed()) return
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+}
+
+function formatServiceErrorMessage(payload) {
+  const p = payload || {}
+  const code = p.code ? ` (${p.code})` : ''
+  const port = Number.isFinite(Number(p.port)) ? `porta ${Number(p.port)}` : 'porta desconhecida'
+  const where = p.kind ? `${String(p.kind).toUpperCase()} em ${port}` : port
+  if (p.code === 'EADDRINUSE') {
+    return (
+      `${where} já está em uso.\n\n` +
+      'Feche a outra instância do inEar Desktop ou qualquer processo Node/headless que já esteja ' +
+      `a usar ${port}, e depois abra o desktop novamente.`
+    )
+  }
+  const detail = p.message ? `\n\nDetalhe: ${String(p.message)}` : ''
+  return `Falha ao iniciar ${where}.${code}${detail}`
+}
 
 function setupMediaPermissionHandler() {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
@@ -182,25 +211,66 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(() => {
-  setupMediaPermissionHandler()
-  try {
-    ipcMain.removeHandler('inear:request-capture-permission')
-  } catch {
-    /* */
-  }
-  ipcMain.handle('inear:request-capture-permission', async () => {
-    const w = BrowserWindow.getFocusedWindow() || mainWindowRef
-    return requestCaptureAudioPermission(w)
+if (singleInstanceLock) {
+  app.on('second-instance', () => {
+    focusMainWindow()
   })
 
-  const { createServices } = require('./server.cjs')
-  services = createServices(app)
-  createWindow()
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  app.on('inear:service-error', (_event, payload) => {
+    const message = formatServiceErrorMessage(payload)
+    console.error('[inear] erro de serviço:', message)
+    if (!app.isReady()) return
+    try {
+      dialog.showErrorBox('Falha ao iniciar áudio do desktop', message)
+    } catch {
+      /* ignore */
+    }
   })
-})
+
+  process.on('uncaughtException', (err) => {
+    const msg = err && err.message ? String(err.message) : String(err)
+    console.error('[inear] uncaughtException:', err)
+    if (!/EADDRINUSE/i.test(msg)) return
+    if (!app.isReady()) return
+    try {
+      dialog.showErrorBox(
+        'Porta já em uso',
+        'Outra instância do servidor já está ativa nas portas do inEar. ' +
+          'Feche o processo antigo e abra o desktop novamente.',
+      )
+    } catch {
+      /* ignore */
+    }
+  })
+
+  app.whenReady().then(() => {
+    setupMediaPermissionHandler()
+    try {
+      ipcMain.removeHandler('inear:request-capture-permission')
+    } catch {
+      /* */
+    }
+    ipcMain.handle('inear:request-capture-permission', async () => {
+      const w = BrowserWindow.getFocusedWindow() || mainWindowRef
+      return requestCaptureAudioPermission(w)
+    })
+
+    createWindow()
+    try {
+      const { createServices } = require('./server.cjs')
+      services = createServices(app)
+    } catch (e) {
+      app.emit('inear:service-error', {
+        kind: 'startup',
+        message: e && e.message ? String(e.message) : String(e),
+        code: e && e.code ? String(e.code) : '',
+      })
+    }
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    })
+  })
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

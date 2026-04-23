@@ -188,11 +188,17 @@ class InEarRepository(
         }
     }
 
-    suspend fun createWebRtcAnswer(apiBase: String, bearer: String, offerSdp: String): WebRtcAnswerResponse {
+    suspend fun createWebRtcAnswer(
+        apiBase: String,
+        bearer: String,
+        offerSdp: String,
+        latencyProfile: String? = null,
+    ): WebRtcAnswerResponse {
         val base = apiBase.trim().trimEnd('/')
         val body = apiJson.encodeToString(
             buildJsonObject {
                 put("sdp", offerSdp)
+                if (!latencyProfile.isNullOrBlank()) put("latencyProfile", latencyProfile)
             },
         ).toRequestBody(jsonMedia)
         val req = Request.Builder()
