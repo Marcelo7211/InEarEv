@@ -1557,6 +1557,7 @@ function createServices(app) {
           channelCount: 2,
           numberOfFrames: WEBRTC_PCM_FRAMES_PER_PUSH,
         })
+        sess.lastAudioPushAt = Date.now()
       } catch (e) {
         console.warn(
           '[inear] WebRTC onData:',
@@ -1568,6 +1569,24 @@ function createServices(app) {
       sess.pcmPendingUsed = u - WEBRTC_PCM_SAMPLES_STEREO
     }
     return true
+  }
+  function summarizeWebRtcSessions() {
+    return Array.from(webrtcSessions.entries()).map(([sessionId, sess]) => ({
+      sessionId,
+      musicianId: sess && sess.id ? sess.id : null,
+      connectionState:
+        sess && sess.pc && sess.pc.connectionState ? String(sess.pc.connectionState) : null,
+      iceConnectionState:
+        sess && sess.pc && sess.pc.iceConnectionState ? String(sess.pc.iceConnectionState) : null,
+      iceGatheringState:
+        sess && sess.pc && sess.pc.iceGatheringState ? String(sess.pc.iceGatheringState) : null,
+      signalingState:
+        sess && sess.pc && sess.pc.signalingState ? String(sess.pc.signalingState) : null,
+      hasTrack: Boolean(sess && sess.track),
+      pendingSamples: sess && typeof sess.pcmPendingUsed === 'number' ? sess.pcmPendingUsed : 0,
+      lastAudioPushMsAgo:
+        sess && sess.lastAudioPushAt ? Math.max(0, Date.now() - sess.lastAudioPushAt) : null,
+    }))
   }
   const muteRampByMusician = new Map()
   let audioSeq = 0
@@ -1767,6 +1786,8 @@ function createServices(app) {
     lastUdpSendMusicianId: null,
     lastWsSendAt: 0,
     lastWsSendMusicianId: null,
+    lastWebRtcSendAt: 0,
+    lastWebRtcSendMusicianId: null,
   }
 
   function resetCaptureDebugState() {
@@ -1786,6 +1807,8 @@ function createServices(app) {
       lastUdpSendMusicianId: null,
       lastWsSendAt: 0,
       lastWsSendMusicianId: null,
+      lastWebRtcSendAt: 0,
+      lastWebRtcSendMusicianId: null,
     }
   }
 
@@ -2629,6 +2652,7 @@ function createServices(app) {
       udpTargetCount: udpTargets.size,
       wsClientCount,
       webrtcSessionCount: webrtcSessions.size,
+      webrtcSessions: summarizeWebRtcSessions(),
       lastUdpSendMsAgo: captureDebugState.lastUdpSendAt
         ? Math.max(0, Date.now() - captureDebugState.lastUdpSendAt)
         : null,
@@ -2637,6 +2661,10 @@ function createServices(app) {
         ? Math.max(0, Date.now() - captureDebugState.lastWsSendAt)
         : null,
       lastWsSendMusicianId: captureDebugState.lastWsSendMusicianId,
+      lastWebRtcSendMsAgo: captureDebugState.lastWebRtcSendAt
+        ? Math.max(0, Date.now() - captureDebugState.lastWebRtcSendAt)
+        : null,
+      lastWebRtcSendMusicianId: captureDebugState.lastWebRtcSendMusicianId,
     })
   })
   ex.get('/api/audio-input-levels', authMiddleware, (_req, res) => {
@@ -3003,14 +3031,19 @@ function createServices(app) {
         }),
       )
       const answer = await pc.createAnswer()
+      if (!answer || !answer.sdp) {
+        throw new Error('createAnswer_returned_empty')
+      }
       const tunedAnswerSdp = tuneWebRtcAudioSdp(answer && answer.sdp ? answer.sdp : '', latencyProfile)
       if (!tunedAnswerSdp || !String(tunedAnswerSdp).trim()) {
         throw new Error('answer_sdp_empty')
       }
-      await pc.setLocalDescription({
+      await pc.setLocalDescription(
+        new wrtc.RTCSessionDescription({
         type: 'answer',
         sdp: tunedAnswerSdp,
-      })
+        }),
+      )
       await waitIceGatheringComplete(pc, 350)
       const localAnswerSdp =
         pc.localDescription && typeof pc.localDescription.sdp === 'string'
@@ -3872,6 +3905,9 @@ function createServices(app) {
           if (!sess || !sess.source) continue
           if (!feedWebRtcSessionAudio(sess, interleaved)) {
             disposeWebRtcSession(sid)
+          } else {
+            captureDebugState.lastWebRtcSendAt = Date.now()
+            captureDebugState.lastWebRtcSendMusicianId = musicianId
           }
         }
       }

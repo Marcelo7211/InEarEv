@@ -1,6 +1,7 @@
 package com.inear.android.audio
 
 import android.content.Context
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import com.inear.android.net.InEarRepository
 import kotlinx.coroutines.CoroutineScope
@@ -346,9 +347,10 @@ class RetornoAudioEngine(
         if (previousAudioMode == null) previousAudioMode = audioManager.mode
         if (previousSpeakerphone == null) previousSpeakerphone = audioManager.isSpeakerphoneOn
         if (previousMicMute == null) previousMicMute = audioManager.isMicrophoneMute
+        val hasExternalOutput = hasExternalAudioOutput()
         try {
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-            audioManager.isSpeakerphoneOn = false
+            audioManager.isSpeakerphoneOn = !hasExternalOutput
             @Suppress("DEPRECATION")
             runCatching { audioManager.isBluetoothScoOn = false }
             audioManager.isMicrophoneMute = false
@@ -377,6 +379,25 @@ class RetornoAudioEngine(
         previousAudioMode = null
         previousSpeakerphone = null
         previousMicMute = null
+    }
+
+    private fun hasExternalAudioOutput(): Boolean {
+        val devices = runCatching { audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS) }.getOrNull()
+            ?: return false
+        return devices.any { device ->
+            when (device.type) {
+                AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                AudioDeviceInfo.TYPE_USB_HEADSET,
+                AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+                AudioDeviceInfo.TYPE_USB_DEVICE,
+                AudioDeviceInfo.TYPE_USB_ACCESSORY,
+                -> true
+
+                else -> false
+            }
+        }
     }
 
     private fun ensurePeerConnectionFactory(): PeerConnectionFactory {
