@@ -1290,7 +1290,7 @@ function defaultState() {
      */
     captureChannelCountAuto: true,
     /** Bloco PCM por tick do motor de áudio (64/128/256/512 amostras @ 48 kHz). */
-    audioBlockSamples: process.platform === 'win32' ? 256 : 64,
+    audioBlockSamples: process.platform === 'win32' ? 128 : 64,
   }
 }
 
@@ -1393,13 +1393,13 @@ function loadOrCreateState(userData) {
         raw.captureChannelCountAuto = Boolean(raw.captureChannelCountAuto)
       }
       if (raw.audioBlockSamples === undefined || raw.audioBlockSamples === null) {
-        raw.audioBlockSamples = process.platform === 'win32' ? 256 : 64
+        raw.audioBlockSamples = process.platform === 'win32' ? 128 : 64
       } else {
         raw.audioBlockSamples = clampAudioBlockSamples(raw.audioBlockSamples)
       }
       let dirty = expandMusicianScopeForInterfaceStrips(raw.showfile)
-      if (process.platform === 'win32' && raw.audioBlockSamples === 64) {
-        raw.audioBlockSamples = 256
+      if (process.platform === 'win32' && (raw.audioBlockSamples === 64 || raw.audioBlockSamples === 256)) {
+        raw.audioBlockSamples = 128
         dirty = true
       }
       if (ensureDefaultAdminUser(raw)) dirty = true
@@ -1881,7 +1881,7 @@ function createServices(app) {
   function captureBufferSoftCapBytes(blockSamples, nCh) {
     const bytesPerFrame = Math.max(1, nCh) * 2
     const minBlockBytes = Math.max(1, blockSamples) * bytesPerFrame
-    const targetMs = process.platform === 'win32' ? 80 : 80
+    const targetMs = process.platform === 'win32' ? 40 : 80
     const targetBytes = Math.round((MVP_SAMPLE_RATE_HZ * bytesPerFrame * targetMs) / 1000)
     return Math.max(minBlockBytes * 2, targetBytes)
   }
