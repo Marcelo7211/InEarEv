@@ -1858,9 +1858,9 @@ function createServices(app) {
   function captureBufferSoftCapBytes(blockSamples, nCh) {
     const bytesPerFrame = Math.max(1, nCh) * 2
     const minBlockBytes = Math.max(1, blockSamples) * bytesPerFrame
-    const targetMs = process.platform === 'win32' ? 220 : 120
+    const targetMs = process.platform === 'win32' ? 80 : 80
     const targetBytes = Math.round((MVP_SAMPLE_RATE_HZ * bytesPerFrame * targetMs) / 1000)
-    return Math.max(minBlockBytes * 4, targetBytes)
+    return Math.max(minBlockBytes * 2, targetBytes)
   }
 
   function normalizeCaptureChannelCount() {
