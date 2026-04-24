@@ -1603,7 +1603,12 @@ function createServices(app) {
 
   function audioBlockSamples() {
     const configured = clampAudioBlockSamples(state.audioBlockSamples)
-    if (process.platform === 'win32' && hasActiveWebRtcLatencyProfile('provocal')) return 64
+    if (
+      process.platform === 'win32' &&
+      (hasActiveWebRtcLatencyProfile('provocal') || hasActiveWebRtcLatencyProfile('pro'))
+    ) {
+      return 64
+    }
     return configured
   }
 
@@ -1893,8 +1898,10 @@ function createServices(app) {
     const targetMs =
       process.platform === 'win32'
         ? hasActiveWebRtcLatencyProfile('provocal')
-          ? 24
-          : 40
+          ? 16
+          : hasActiveWebRtcLatencyProfile('pro')
+            ? 20
+            : 40
         : 80
     const targetBytes = Math.round((MVP_SAMPLE_RATE_HZ * bytesPerFrame * targetMs) / 1000)
     return Math.max(minBlockBytes * 2, targetBytes)
@@ -3034,10 +3041,11 @@ function createServices(app) {
           disposeWebRtcSession(sessionId)
         }
       }
+      const tunedOfferSdp = tuneWebRtcAudioSdp(sdp, latencyProfile)
       await pc.setRemoteDescription(
         new wrtc.RTCSessionDescription({
           type: 'offer',
-          sdp,
+          sdp: tunedOfferSdp,
         }),
       )
       const answer = await pc.createAnswer()
@@ -3597,6 +3605,7 @@ function createServices(app) {
   }
   function buildWebRtcOpusFmtp(payload, currentLine, desiredPtime, latencyProfile = 'pro') {
     const params = new Map()
+    const aggressive = latencyProfile === 'pro' || latencyProfile === 'provocal'
     String(currentLine || '')
       .replace(new RegExp(`^a=fmtp:${payload}\\s+`), '')
       .split(';')
@@ -3610,16 +3619,19 @@ function createServices(app) {
     params.set('minptime', String(desiredPtime))
     params.set('ptime', String(desiredPtime))
     params.set('maxptime', String(desiredPtime))
-    params.set('stereo', '1')
-    params.set('sprop-stereo', '1')
+    params.set('stereo', aggressive ? '0' : '1')
+    params.set('sprop-stereo', aggressive ? '0' : '1')
     params.set('maxplaybackrate', String(MVP_SAMPLE_RATE_HZ))
     params.set('usedtx', '0')
-    const aggressive = latencyProfile === 'pro' || latencyProfile === 'provocal'
-    params.set('useinbandfec', aggressive ? '0' : '1')
-    params.set('cbr', aggressive ? '1' : params.get('cbr') || '0')
-    params.set('x-google-min-bitrate', latencyProfile === 'provocal' ? '160' : aggressive ? '128' : '96')
-    params.set('x-google-start-bitrate', latencyProfile === 'provocal' ? '192' : aggressive ? '160' : '128')
-    params.set('x-google-max-bitrate', latencyProfile === 'provocal' ? '256' : aggressive ? '192' : '160')
+    params.set('useinbandfec', '1')
+    params.set('cbr', aggressive ? '0' : params.get('cbr') || '0')
+    params.set(
+      'maxaveragebitrate',
+      latencyProfile === 'provocal' ? '64000' : aggressive ? '96000' : params.get('maxaveragebitrate') || '128000',
+    )
+    params.set('x-google-min-bitrate', latencyProfile === 'provocal' ? '48' : aggressive ? '64' : '96')
+    params.set('x-google-start-bitrate', latencyProfile === 'provocal' ? '64' : aggressive ? '80' : '128')
+    params.set('x-google-max-bitrate', latencyProfile === 'provocal' ? '96' : aggressive ? '128' : '160')
     return `a=fmtp:${payload} ${Array.from(params.entries())
       .map(([k, v]) => `${k}=${v}`)
       .join(';')}`

@@ -345,7 +345,8 @@ export function AdminApp() {
     return `http://${serverIps[0]}:3847`
   }, [serverIps])
 
-  const adminTabs = [
+  const pairingUiEnabled = false
+  const adminTabsBase = [
     ['session', 'Início'],
     ['channels', 'Mesa'],
     ['musicians', 'Integrantes'],
@@ -353,6 +354,9 @@ export function AdminApp() {
     ['audio', 'Entrada de áudio'],
     ['pairing', 'Código de acesso'],
   ] as const
+  const adminTabs = pairingUiEnabled
+    ? adminTabsBase
+    : adminTabsBase.filter(([key]) => key !== 'pairing')
 
   if (!token || !role) {
     return (
@@ -620,7 +624,7 @@ export function AdminApp() {
     },
   } as const
 
-  const activeAdminTabLabel = adminTabs.find(([k]) => k === tab)?.[1] ?? 'Sessão'
+  const activeAdminTabLabel = adminTabs.find(([k]) => k === tab)?.[1] ?? 'Início'
   const sessionQuickStats = [
     { label: 'Perfil', value: showfile?.networkProfile || 'n/d' },
     { label: 'Músicos', value: String(showfile?.musicians.length ?? 0) },
@@ -837,18 +841,27 @@ export function AdminApp() {
           box-sizing:border-box;
           overflow-x:auto;
           overflow-y:hidden;
-          border:1px solid #334861;
-          border-radius:10px;
-          background:linear-gradient(180deg,#131a24 0%,#0f141c 100%);
-          padding:6px 4px 10px;
-          box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+          border:1px solid #3a516d;
+          border-radius:18px;
+          background:
+            radial-gradient(circle at top, rgba(88,166,255,.08), transparent 24%),
+            linear-gradient(180deg,#131a24 0%,#0f141c 100%);
+          padding:10px 8px 14px;
+          box-shadow:inset 0 1px 0 rgba(255,255,255,.04), 0 12px 28px rgba(0,0,0,.2);
         }
         .chBoard{
-          display:flex;gap:6px;align-items:stretch;
+          display:flex;gap:10px;align-items:stretch;
           width:max-content;
           max-width:none;
-          padding:2px 0 8px;
+          padding:2px 2px 10px;
           scroll-snap-type:x mandatory;
+        }
+        .deskInfoPill{
+          display:grid;gap:4px;min-width:132px;padding:10px 12px;border-radius:14px;
+          border:1px solid rgba(88,166,255,.18);background:rgba(8,13,20,.58);
+        }
+        .deskInfoPill__label{
+          color:#7f93ab;font-size:11px;text-transform:uppercase;letter-spacing:.08em;
         }
         .chBoard.musicianDeskBoard{
           min-height:260px;
@@ -946,11 +959,21 @@ export function AdminApp() {
         }
         .chCard{
           --ch-accent:#58a6ff;
-          flex:0 0 auto;width:min(198px, 88vw);scroll-snap-align:start;box-sizing:border-box;
-          border-radius:8px;padding:6px 7px;
-          background:linear-gradient(180deg,#1a212d 0%,#11161f 100%);
-          box-shadow:0 10px 24px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.03);
-          display:flex;flex-direction:column;gap:5px;
+          flex:0 0 auto;width:min(218px, 88vw);scroll-snap-align:start;box-sizing:border-box;
+          border-radius:16px;padding:10px 10px 9px;
+          background:
+            radial-gradient(circle at top right, color-mix(in srgb, var(--ch-accent, #58a6ff) 12%, transparent), transparent 28%),
+            linear-gradient(180deg,#19212d 0%,#101722 100%);
+          box-shadow:0 14px 28px rgba(0,0,0,.26), inset 0 1px 0 rgba(255,255,255,.03);
+          display:flex;flex-direction:column;gap:8px;
+        }
+        .chCard__sourcePill{
+          align-self:flex-start;
+          padding:4px 10px;border-radius:999px;
+          border:1px solid color-mix(in srgb, var(--ch-accent, #58a6ff) 35%, #3c5068);
+          background:rgba(8,13,20,.68);
+          color:color-mix(in srgb, var(--ch-accent, #dbe6f3) 72%, #dbe6f3);
+          font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
         }
         .chCard__hdr{
           display:flex;align-items:flex-start;gap:6px;
@@ -969,33 +992,36 @@ export function AdminApp() {
           box-shadow:0 0 8px rgba(248,81,73,.6);
         }
         .chCard__titles{min-width:0;flex:1 1 auto;}
-        .chCard__titles strong{display:block;font-size:11px;line-height:1.15;color:#e8eaed;}
-        .chCard__titles small{display:block;margin-top:2px;color:#9aa0a6;font-size:9px;line-height:1.2;}
+        .chCard__titles strong{display:block;font-size:12px;line-height:1.15;color:#e8eaed;}
+        .chCard__titles small{display:block;margin-top:2px;color:#9aa0a6;font-size:10px;line-height:1.25;}
+        .deskFieldLabel{
+          color:#8ea8c2;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;
+        }
         .deskField{
-          width:100%;box-sizing:border-box;padding:4px 6px;border-radius:6px;border:1px solid #3c5068;
-          background:#141c28;color:#e8eaed;outline:none;font-size:10px;
+          width:100%;box-sizing:border-box;padding:8px 10px;border-radius:10px;border:1px solid #3c5068;
+          background:#141c28;color:#e8eaed;outline:none;font-size:11px;
           box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
         }
         .deskField:focus{border-color:color-mix(in srgb, var(--ch-accent, #58a6ff) 55%, #3c5068);box-shadow:0 0 0 2px color-mix(in srgb, var(--ch-accent, #58a6ff) 25%, transparent);}
         .deskSelect{
-          width:100%;box-sizing:border-box;padding:4px 6px;border-radius:6px;border:1px solid #3c5068;
-          background:#141c28;color:#e8eaed;outline:none;font-size:10px;
+          width:100%;box-sizing:border-box;padding:8px 10px;border-radius:10px;border:1px solid #3c5068;
+          background:#141c28;color:#e8eaed;outline:none;font-size:11px;
         }
-        .deskMiniRow{display:flex;gap:4px;align-items:center;}
+        .deskMiniRow{display:flex;gap:8px;align-items:center;}
         .deskColor{
-          width:24px;height:22px;padding:0;border-radius:6px;border:1px solid color-mix(in srgb, var(--ch-accent, #58a6ff) 35%, #3c5068);
+          width:34px;height:34px;padding:0;border-radius:10px;border:1px solid color-mix(in srgb, var(--ch-accent, #58a6ff) 35%, #3c5068);
           background:transparent;cursor:pointer;box-shadow:inset 0 0 0 2px rgba(0,0,0,.35);
         }
         .deskBtn{
           border:1px solid color-mix(in srgb, var(--ch-accent, #58a6ff) 35%, #3c5068);
           background:linear-gradient(180deg,#223047 0%,#141c28 100%);
-          color:#dbe6f3;border-radius:6px;padding:4px 7px;font-weight:800;font-size:9px;cursor:pointer;
+          color:#dbe6f3;border-radius:999px;padding:7px 12px;font-weight:800;font-size:10px;cursor:pointer;
           box-shadow:inset 0 1px 0 rgba(255,255,255,.05);
         }
         .deskBtn:hover{border-color:color-mix(in srgb, var(--ch-accent, #58a6ff) 65%, #3c5068);}
         .deskMute{
           position:relative;display:inline-flex;align-items:center;gap:6px;user-select:none;
-          padding:2px 6px;border-radius:999px;border:1px solid #3c5068;background:#141c28;color:#dbe6f3;font-size:9px;font-weight:800;
+          padding:4px 8px;border-radius:999px;border:1px solid #3c5068;background:#141c28;color:#dbe6f3;font-size:10px;font-weight:800;
           box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
         }
         .deskMute input{
@@ -1031,7 +1057,7 @@ export function AdminApp() {
         }
         .deskLatch{
           position:relative;display:inline-flex;align-items:center;gap:6px;user-select:none;width:100%;box-sizing:border-box;
-          padding:2px 6px;border-radius:999px;border:1px solid #3c5068;background:#141c28;color:#dbe6f3;font-size:9px;font-weight:800;
+          padding:5px 8px;border-radius:999px;border:1px solid #3c5068;background:#141c28;color:#dbe6f3;font-size:10px;font-weight:800;
           box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
         }
         .deskLatch input{position:absolute;opacity:0;}
@@ -1047,15 +1073,15 @@ export function AdminApp() {
           background:#fbbc04;box-shadow:0 0 12px rgba(251,188,4,.45);
         }
         .panInline{
-          margin:0 auto 4px;max-width:184px;padding:4px 6px;border:1px solid #334861;border-radius:6px;background:#111926;
+          margin:0 auto 4px;max-width:100%;padding:8px 10px;border:1px solid #334861;border-radius:12px;background:#111926;
           box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
         }
         .panInline__head{
           display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;
-          color:#dbe6f3;font-size:10px;font-weight:800;line-height:1.1;
+          color:#dbe6f3;font-size:11px;font-weight:800;line-height:1.1;
         }
         .panInline__scale{
-          display:flex;justify-content:space-between;margin-top:2px;color:#8ea8c2;font-size:10px;line-height:1.1;
+          display:flex;justify-content:space-between;margin-top:3px;color:#8ea8c2;font-size:10px;line-height:1.1;
           font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
         }
         .panInline .inearRange{
@@ -1432,7 +1458,7 @@ export function AdminApp() {
         </section>
       )}
 
-      {showfile && role === 'admin' && tab === 'pairing' && (
+      {pairingUiEnabled && showfile && role === 'admin' && tab === 'pairing' && (
         <section style={ui.panelCard}>
           <h2>Código de acesso para músicos</h2>
           <p style={{ color: '#9aa0a6', marginTop: 0 }}>
@@ -2915,8 +2941,37 @@ function ChannelTable({
     )
   }
   return (
-    <div style={{ minWidth: 0, maxWidth: '100%', width: '100%' }}>
-    <div className="chBoardShell">
+    <div style={{ minWidth: 0, maxWidth: '100%', width: '100%', display: 'grid', gap: 14 }}>
+      <section
+        style={{
+          border: '1px solid rgba(67,94,123,.7)',
+          borderRadius: 18,
+          padding: 16,
+          background:
+            'radial-gradient(circle at top right, rgba(88,166,255,.08), transparent 22%), linear-gradient(180deg,#141d2a 0%,#0d1621 100%)',
+          boxShadow: '0 16px 34px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.03)',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div>
+            <h2 style={{ margin: 0 }}>Mesa do show</h2>
+            <p style={{ margin: '8px 0 0', color: '#9aa0a6', maxWidth: 720 }}>
+              Edite nome, ícone, cor, volume, posição e equalização de cada canal em um só lugar.
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <div className="deskInfoPill">
+              <span className="deskInfoPill__label">Canais</span>
+              <strong>{showfile.channels.length}</strong>
+            </div>
+            <div className="deskInfoPill">
+              <span className="deskInfoPill__label">Entrada</span>
+              <strong>Organizada por canal</strong>
+            </div>
+          </div>
+        </div>
+      </section>
+      <div className="chBoardShell">
       <div className="chBoard">
       {showfile.channels.map((ch) => {
         const accent = channelAccentColor(ch)
@@ -2941,6 +2996,7 @@ function ChannelTable({
               } as CSSProperties
             }
           >
+            <div className="chCard__sourcePill">{srcLabel}</div>
             <div className="chCard__hdr">
               <div className={`chCard__badge${ch.mute ? ' chCard__badge--muted' : ''}`} style={{ background: accent }}>
                 {channelIconGlyph(ch.icon)}
@@ -2955,6 +3011,7 @@ function ChannelTable({
               </div>
             </div>
 
+            <div className="deskFieldLabel">Nome do canal</div>
               <input
               className="deskField"
                 value={nameFor(ch.id, ch.name)}
@@ -2967,6 +3024,7 @@ function ChannelTable({
               placeholder="Nome do canal"
             />
 
+            <div className="deskFieldLabel">Ícone e cor</div>
             <div className="deskMiniRow">
                 <select
                 className="deskSelect"
