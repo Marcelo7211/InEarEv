@@ -214,7 +214,6 @@ export function AdminApp() {
   }, [token])
 
   useEffect(() => {
-    if (token) return
     let cancelled = false
     const loadIps = async () => {
       try {
@@ -232,7 +231,7 @@ export function AdminApp() {
     return () => {
       cancelled = true
     }
-  }, [token])
+  }, [])
 
   /** Remove JWT da barra de endereço após consumir (mantém ?api= para refresh). */
   useEffect(() => {
@@ -345,6 +344,17 @@ export function AdminApp() {
     return `http://${serverIps[0]}:3847`
   }, [serverIps])
 
+  const preferredDesktopAppBase = useMemo(() => {
+    if (typeof window === 'undefined') return 'Somente local no PC'
+    if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+      const protocol = window.location.protocol
+      const port = window.location.port ? `:${window.location.port}` : ''
+      if (serverIps.length > 0) return `${protocol}//${serverIps[0]}${port}`
+      return window.location.origin
+    }
+    return 'Somente local no PC (Electron)'
+  }, [serverIps])
+
   const pairingUiEnabled = false
   const adminTabsBase = [
     ['session', 'Início'],
@@ -434,18 +444,12 @@ export function AdminApp() {
                   padding: 14,
                 }}
               >
-                <p style={{ color: '#9aa0a6', margin: 0, fontSize: 12, textTransform: 'uppercase', letterSpacing: '.08em' }}>
-                  API local
-                </p>
-                <p style={{ margin: '6px 0 10px', color: '#f0f6fc', fontWeight: 700 }}>
-                  <code>{getApiBase()}</code>
-                </p>
-                <p style={{ color: '#9aa0a6', margin: 0, fontSize: 12, textTransform: 'uppercase', letterSpacing: '.08em' }}>
-                  Rota RTC
-                </p>
-                <p style={{ color: '#81c995', margin: '6px 0 0', fontWeight: 700 }}>
-                  <code>{preferredServerApiBase}</code>
-                </p>
+                <div style={{ color: '#9aa0a6', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                  App desktop na rede <code style={{ color: '#f0f6fc', fontWeight: 700 }}>{preferredDesktopAppBase}</code>
+                </div>
+                <div style={{ color: '#9aa0a6', marginTop: 10, fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                  API do retorno <code style={{ color: '#81c995', fontWeight: 700 }}>{preferredServerApiBase}</code>
+                </div>
               </div>
             </div>
             {setupChecked && setupRequired ? (
@@ -692,8 +696,11 @@ export function AdminApp() {
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
-          <div style={{ color: '#8ea8c2', fontSize: 12 }}>
+          <div style={{ color: '#8ea8c2', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
             API <code>{preferredServerApiBase}</code>
+          </div>
+          <div style={{ color: '#8ea8c2', fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+            App desktop <code>{preferredDesktopAppBase}</code>
           </div>
           <button type="button" onClick={logout} style={ui.pillBtn}>
             Sair
