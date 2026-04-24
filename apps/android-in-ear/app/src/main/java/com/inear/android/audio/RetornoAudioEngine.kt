@@ -323,6 +323,7 @@ class RetornoAudioEngine(
 
     private fun targetLatencyMs(latency: String): Int =
         when (latency) {
+            "provocal" -> 10
             "pro" -> 15
             "low" -> 80
             "wifi24" -> 180
@@ -421,6 +422,7 @@ class RetornoAudioEngine(
 
     private fun maxJitterPacketsForLatency(latency: String): Int =
         when (latency) {
+            "provocal" -> 1
             "pro" -> 2
             "low" -> 6
             "wifi24" -> 12
@@ -432,6 +434,7 @@ class RetornoAudioEngine(
         if (sdp.isBlank()) return sdp
         val desiredPtime =
             when (latency) {
+                "provocal" -> 10
                 "pro" -> 10
                 "low" -> 10
                 "wifi24" -> 20
@@ -491,12 +494,13 @@ class RetornoAudioEngine(
         params["stereo"] = "1"
         params["sprop-stereo"] = "1"
         params["maxplaybackrate"] = SAMPLE_RATE.toString()
-        params["useinbandfec"] = if (latency == "pro") "0" else "1"
+        val aggressive = latency == "pro" || latency == "provocal"
+        params["useinbandfec"] = if (aggressive) "0" else "1"
         params["usedtx"] = "0"
-        params["cbr"] = if (latency == "pro") "1" else params["cbr"] ?: "0"
-        params["x-google-min-bitrate"] = if (latency == "pro") "128" else "96"
-        params["x-google-start-bitrate"] = if (latency == "pro") "160" else "128"
-        params["x-google-max-bitrate"] = if (latency == "pro") "192" else "160"
+        params["cbr"] = if (aggressive) "1" else params["cbr"] ?: "0"
+        params["x-google-min-bitrate"] = if (latency == "provocal") "160" else if (latency == "pro") "128" else "96"
+        params["x-google-start-bitrate"] = if (latency == "provocal") "192" else if (latency == "pro") "160" else "128"
+        params["x-google-max-bitrate"] = if (latency == "provocal") "256" else if (latency == "pro") "192" else "160"
         return "a=fmtp:$opusPayload " + params.entries.joinToString(";") { "${it.key}=${it.value}" }
     }
 

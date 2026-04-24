@@ -345,90 +345,156 @@ export function AdminApp() {
     return `http://${serverIps[0]}:3847`
   }, [serverIps])
 
+  const adminTabs = [
+    ['session', 'Início'],
+    ['channels', 'Mesa'],
+    ['musicians', 'Integrantes'],
+    ['network', 'Conexão'],
+    ['audio', 'Entrada de áudio'],
+    ['pairing', 'Código de acesso'],
+  ] as const
+
   if (!token || !role) {
     return (
       <main
         style={{
-          padding: 24,
-          maxWidth: 560,
+          padding: '40px 24px',
+          maxWidth: 620,
           margin: '0 auto',
           minHeight: '100vh',
           overflowY: 'auto',
           boxSizing: 'border-box',
+          display: 'flex',
+          alignItems: 'center',
         }}
       >
-        <h1 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span role="img" aria-label="fone de ouvido">
-            🎧
-          </span>
-          <span>inEar — login</span>
-        </h1>
         <div
           style={{
-            border: '1px solid #2f425b',
-            borderRadius: 16,
-            background: 'linear-gradient(180deg,#182434 0%,#111a26 100%)',
-            boxShadow: '0 10px 26px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.03)',
-            padding: 14,
-            marginBottom: 14,
+            width: '100%',
+            border: '1px solid rgba(90,162,255,.26)',
+            borderRadius: 24,
+            background:
+              'radial-gradient(circle at top left, rgba(88,166,255,.18), transparent 28%), linear-gradient(180deg,#121925 0%,#0b1119 100%)',
+            boxShadow:
+              '0 30px 80px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.05), 0 0 0 1px rgba(17,24,39,.55)',
+            padding: 22,
+            position: 'relative',
+            overflow: 'hidden',
           }}
         >
-          <p style={{ color: '#9aa0a6', margin: 0 }}>
-            API local: <code>{getApiBase()}</code>
-          </p>
-          <p style={{ color: '#81c995', margin: '8px 0 0', fontSize: 13 }}>
-            IP de conexão (RTC): <code>{preferredServerApiBase}</code>
-          </p>
-        </div>
-        {setupChecked && setupRequired ? (
-          <aside
+          <div
             style={{
-              background: '#1a2332',
-              border: '1px solid #394457',
-              borderRadius: 8,
-              padding: 12,
-              marginBottom: 16,
-              fontSize: 13,
-              color: '#bdc1c6',
+              position: 'absolute',
+              inset: 0,
+              background:
+                'linear-gradient(transparent 0%, rgba(255,255,255,.02) 50%, transparent 100%)',
+              backgroundSize: '100% 18px',
+              opacity: 0.2,
+              pointerEvents: 'none',
             }}
-          >
-            <strong>Primeira instalação</strong>
-            <p style={{ margin: '8px 0 0', color: '#9aa0a6' }}>
-              Crie agora o acesso de administrador. O cadastro de músicos será
-              feito depois, dentro do painel Admin.
-            </p>
-          </aside>
-        ) : null}
-        {error && <p style={{ color: '#f28b82' }}>{error}</p>}
-        {setupChecked && setupRequired ? <h2 style={{ marginBottom: 10 }}>Criar Admin</h2> : null}
-        <label style={{ display: 'block', marginBottom: 8 }}>
+          />
+          <div style={{ position: 'relative', zIndex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 22, flexWrap: 'wrap' }}>
+              <div>
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    borderRadius: 999,
+                    border: '1px solid rgba(90,162,255,.28)',
+                    background: 'rgba(12,18,28,.8)',
+                    padding: '5px 12px',
+                    color: '#8ab4ff',
+                    fontSize: 12,
+                    fontWeight: 800,
+                    letterSpacing: '.12em',
+                    textTransform: 'uppercase',
+                    marginBottom: 12,
+                  }}
+                >
+                  <span style={{ width: 8, height: 8, borderRadius: 999, background: '#2ea043', boxShadow: '0 0 10px rgba(46,160,67,.7)' }} />
+                  Console Tecnico
+                </div>
+                <h1 style={{ margin: 0, fontSize: 34, letterSpacing: '.03em' }}>inEar Desktop</h1>
+                <p style={{ margin: '8px 0 0', color: '#9aa0a6', maxWidth: 420 }}>
+                  Painel de controle com visual de palco para captacao, roteamento e monitoracao do retorno ao vivo.
+                </p>
+              </div>
+              <div
+                style={{
+                  minWidth: 220,
+                  border: '1px solid rgba(138,180,248,.18)',
+                  borderRadius: 18,
+                  background: 'rgba(8,12,18,.72)',
+                  padding: 14,
+                }}
+              >
+                <p style={{ color: '#9aa0a6', margin: 0, fontSize: 12, textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                  API local
+                </p>
+                <p style={{ margin: '6px 0 10px', color: '#f0f6fc', fontWeight: 700 }}>
+                  <code>{getApiBase()}</code>
+                </p>
+                <p style={{ color: '#9aa0a6', margin: 0, fontSize: 12, textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                  Rota RTC
+                </p>
+                <p style={{ color: '#81c995', margin: '6px 0 0', fontWeight: 700 }}>
+                  <code>{preferredServerApiBase}</code>
+                </p>
+              </div>
+            </div>
+            {setupChecked && setupRequired ? (
+              <aside
+                style={{
+                  background: 'rgba(21,29,41,.92)',
+                  border: '1px solid rgba(255,196,61,.22)',
+                  borderRadius: 14,
+                  padding: 14,
+                  marginBottom: 18,
+                  fontSize: 13,
+                  color: '#dbe6f3',
+                }}
+              >
+                <strong style={{ color: '#ffd866' }}>Primeira instalação</strong>
+                <p style={{ margin: '8px 0 0', color: '#9aa0a6' }}>
+                  Crie agora o acesso de administrador. O cadastro de músicos será
+                  feito depois, dentro do painel Admin.
+                </p>
+              </aside>
+            ) : null}
+            {error && <p style={{ color: '#f28b82', marginBottom: 14 }}>{error}</p>}
+            {setupChecked && setupRequired ? <h2 style={{ marginBottom: 14 }}>Criar Admin</h2> : <h2 style={{ marginBottom: 14 }}>Entrar no painel</h2>}
+            <label style={{ display: 'block', marginBottom: 12, color: '#c9d1d9', fontWeight: 700, letterSpacing: '.02em' }}>
           Usuário
           <input
             style={{
               width: '100%',
-              marginTop: 4,
-              background: '#0f1722',
+              marginTop: 6,
+              background: '#0c131d',
               color: '#e8eaed',
               border: '1px solid #34485f',
-              borderRadius: 8,
-              padding: '8px 10px',
+              borderRadius: 12,
+              padding: '12px 14px',
+              boxShadow: 'inset 0 1px 0 rgba(255,255,255,.03)',
             }}
             value={loginUser}
             onChange={(e) => setLoginUser(e.target.value)}
           />
         </label>
-        <label style={{ display: 'block', marginBottom: 8 }}>
+        <label style={{ display: 'block', marginBottom: 18, color: '#c9d1d9', fontWeight: 700, letterSpacing: '.02em' }}>
           Senha
           <input
             type="password"
             style={{
               width: '100%',
-              marginTop: 4,
-              background: '#0f1722',
+              marginTop: 6,
+              background: '#0c131d',
               color: '#e8eaed',
               border: '1px solid #34485f',
-              borderRadius: 8,
-              padding: '8px 10px',
+              borderRadius: 12,
+              padding: '12px 14px',
+              boxShadow: 'inset 0 1px 0 rgba(255,255,255,.03)',
             }}
             value={loginPass}
             onChange={(e) => setLoginPass(e.target.value)}
@@ -439,12 +505,14 @@ export function AdminApp() {
             type="button"
             onClick={bootstrapAdmin}
             style={{
-              padding: '8px 14px',
+              padding: '12px 18px',
               borderRadius: 999,
-              border: '1px solid #335f8a',
-              background: 'linear-gradient(180deg,#234265 0%,#172a42 100%)',
+              border: '1px solid #4f8fd6',
+              background: 'linear-gradient(180deg,#2f5680 0%,#1a2d44 100%)',
               color: '#e8eaed',
               cursor: 'pointer',
+              fontWeight: 800,
+              minWidth: 210,
             }}
           >
             Criar admin e entrar
@@ -454,17 +522,21 @@ export function AdminApp() {
             type="button"
             onClick={login}
             style={{
-              padding: '8px 14px',
+              padding: '12px 18px',
               borderRadius: 999,
-              border: '1px solid #335f8a',
-              background: 'linear-gradient(180deg,#234265 0%,#172a42 100%)',
+              border: '1px solid #4f8fd6',
+              background: 'linear-gradient(180deg,#2f5680 0%,#1a2d44 100%)',
               color: '#e8eaed',
               cursor: 'pointer',
+              fontWeight: 800,
+              minWidth: 160,
             }}
           >
             Entrar
           </button>
         )}
+          </div>
+        </div>
       </main>
     )
   }
@@ -474,90 +546,155 @@ export function AdminApp() {
   )
   const ui = {
     main: {
-        padding: 24,
-        minHeight: '100vh',
-        overflowY: 'auto',
+      padding: 24,
+      minHeight: '100vh',
+      overflowY: 'auto',
       boxSizing: 'border-box' as const,
-        background:
+      maxWidth: 1520,
+      margin: '0 auto',
+      background:
         'radial-gradient(circle at 8% -10%, rgba(88,166,255,.22), transparent 30%), radial-gradient(circle at 92% -18%, rgba(46,160,67,.12), transparent 32%), linear-gradient(180deg,#070b11 0%,#0d131d 100%)',
     },
     panelHeader: {
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: 16,
-          padding: 16,
-      border: '1px solid #2f425b',
-          borderRadius: 18,
-      background: 'linear-gradient(180deg,#182434 0%,#111a26 100%)',
-      boxShadow: '0 10px 26px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.03)',
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      gap: 14,
+      marginBottom: 16,
+      padding: 18,
+      border: '1px solid rgba(80,129,186,.4)',
+      borderRadius: 22,
+      background:
+        'radial-gradient(circle at top left, rgba(88,166,255,.14), transparent 24%), linear-gradient(180deg,#162131 0%,#0f1724 100%)',
+      boxShadow: '0 18px 40px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.04)',
     },
     navWrap: {
-          display: 'flex',
-          gap: 8,
-          marginBottom: 16,
-          flexWrap: 'wrap',
-          padding: 10,
-      border: '1px solid #2b3f57',
-          borderRadius: 18,
-      background: 'linear-gradient(180deg,#111a27 0%,#0f1722 100%)',
-      boxShadow: 'inset 0 1px 0 rgba(255,255,255,.03)',
+      display: 'flex',
+      gap: 8,
+      marginBottom: 16,
+      flexWrap: 'wrap',
+      padding: 12,
+      border: '1px solid rgba(71,97,128,.55)',
+      borderRadius: 20,
+      background: 'linear-gradient(180deg,rgba(15,23,34,.95) 0%,rgba(12,18,28,.95) 100%)',
+      boxShadow: 'inset 0 1px 0 rgba(255,255,255,.04), 0 10px 24px rgba(0,0,0,.18)',
+      position: 'sticky' as const,
+      top: 12,
+      zIndex: 5,
+      backdropFilter: 'blur(12px)',
     },
     tabBtn: {
       fontWeight: 600,
-      background: '#1e2836',
+      background: 'linear-gradient(180deg,#182230 0%,#101721 100%)',
       color: '#c9d1d9',
-      border: '1px solid #3a4a5f',
+      border: '1px solid rgba(87,111,140,.7)',
       borderRadius: 999,
-      padding: '7px 14px',
-      letterSpacing: '.02em',
+      padding: '9px 16px',
+      letterSpacing: '.04em',
+      textTransform: 'uppercase' as const,
+      fontSize: 11,
     },
     tabBtnActive: {
       fontWeight: 800,
-      background: 'linear-gradient(180deg,#27466b 0%,#1f3550 100%)',
+      background: 'linear-gradient(180deg,#325b89 0%,#203956 100%)',
       color: '#f0f6fc',
       border: '1px solid #5aa2ff',
-      boxShadow: '0 0 0 1px rgba(88,166,255,.20) inset',
+      boxShadow: '0 0 0 1px rgba(88,166,255,.20) inset, 0 8px 18px rgba(0,0,0,.25)',
     },
     pillBtn: {
       borderRadius: 999,
-      border: '1px solid #3a4a5f',
-      background: '#1d2634',
+      border: '1px solid rgba(90,122,155,.72)',
+      background: 'linear-gradient(180deg,#1a2432 0%,#111824 100%)',
       color: '#e6edf3',
-      padding: '8px 14px',
+      padding: '9px 15px',
       fontWeight: 700,
+      boxShadow: 'inset 0 1px 0 rgba(255,255,255,.05)',
     },
     panelCard: {
-      border: '1px solid #2f425b',
-      borderRadius: 18,
-      padding: 18,
-      background: 'linear-gradient(180deg,#162231 0%,#0f1925 100%)',
-      boxShadow: '0 8px 22px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.03)',
+      border: '1px solid rgba(67,94,123,.7)',
+      borderRadius: 22,
+      padding: 20,
+      background:
+        'radial-gradient(circle at top right, rgba(88,166,255,.08), transparent 22%), linear-gradient(180deg,#141d2a 0%,#0d1621 100%)',
+      boxShadow: '0 16px 34px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.03)',
     },
   } as const
+
+  const activeAdminTabLabel = adminTabs.find(([k]) => k === tab)?.[1] ?? 'Sessão'
+  const sessionQuickStats = [
+    { label: 'Perfil', value: showfile?.networkProfile || 'n/d' },
+    { label: 'Músicos', value: String(showfile?.musicians.length ?? 0) },
+    { label: 'Canais', value: String(showfile?.channels.length ?? 0) },
+    { label: 'Bloco PCM', value: audioBlockSamples ? `${audioBlockSamples} smp` : 'auto' },
+  ]
 
   return (
     <main style={ui.main}>
       <header style={ui.panelHeader}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <h1 style={{ margin: 0 }}>inEar — painel ({role})</h1>
-          <span
-            style={{
-              borderRadius: 999,
-              border: '1px solid #2ea043',
-              color: '#9be9a8',
-              fontSize: 11,
-              fontWeight: 800,
-              padding: '3px 10px',
-              letterSpacing: '.08em',
-            }}
-          >
-            LIVE MIX
-          </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <h1 style={{ margin: 0 }}>inEar Console</h1>
+              <span
+                style={{
+                  borderRadius: 999,
+                  border: '1px solid #2ea043',
+                  color: '#9be9a8',
+                  fontSize: 11,
+                  fontWeight: 800,
+                  padding: '4px 10px',
+                  letterSpacing: '.1em',
+                }}
+              >
+                LIVE MIX
+              </span>
+              <span
+                style={{
+                  borderRadius: 999,
+                  border: '1px solid rgba(95,121,152,.75)',
+                  color: '#9ab8d8',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  padding: '4px 10px',
+                  letterSpacing: '.06em',
+                  textTransform: 'uppercase',
+                }}
+              >
+                {role}
+              </span>
+            </div>
+            <p style={{ margin: '8px 0 0', color: '#9aa0a6' }}>
+              Visual tecnico para controle rapido de palco, roteamento e retorno em tempo real.
+            </p>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+            {sessionQuickStats.map((item) => (
+              <div
+                key={item.label}
+                style={{
+                  minWidth: 108,
+                  borderRadius: 16,
+                  border: '1px solid rgba(88,166,255,.18)',
+                  background: 'rgba(8,13,20,.58)',
+                  padding: '10px 12px',
+                }}
+              >
+                <div style={{ color: '#7f93ab', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                  {item.label}
+                </div>
+                <div style={{ color: '#f0f6fc', fontWeight: 800, marginTop: 4 }}>{item.value}</div>
+              </div>
+            ))}
+          </div>
         </div>
-        <button type="button" onClick={logout} style={ui.pillBtn}>
-          Sair
-        </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
+          <div style={{ color: '#8ea8c2', fontSize: 12 }}>
+            API <code>{preferredServerApiBase}</code>
+          </div>
+          <button type="button" onClick={logout} style={ui.pillBtn}>
+            Sair
+          </button>
+        </div>
       </header>
       <style>{`
         .inearRange{
@@ -941,16 +1078,11 @@ export function AdminApp() {
       <nav style={ui.navWrap}>
         {role === 'admin' && (
           <>
-            {(
-              [
-                ['session', 'Sessão'],
-                ['channels', 'Canais'],
-                ['musicians', 'Músicos'],
-                ['network', 'Rede'],
-                ['audio', 'Entrada de áudio'],
-                ['pairing', 'Pairing'],
-              ] as const
-            ).map(([k, label]) => (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginRight: 8, color: '#7f93ab', fontSize: 12, textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 700 }}>
+              Bloco ativo
+              <span style={{ color: '#f0f6fc' }}>{activeAdminTabLabel}</span>
+            </div>
+            {adminTabs.map(([k, label]) => (
               <button
                 key={k}
                 type="button"
@@ -967,32 +1099,63 @@ export function AdminApp() {
         )}
         {role === 'musician' && (
           <span style={{ color: '#9aa0a6' }}>
-            Mix: faders de send por canal abaixo (após o técnico sincronizar as faixas
-            no Mac). Retorno WebSocket no app móvel.
+            Seu retorno aparece abaixo. Ajuste o que quer ouvir em cada canal depois que o
+            técnico preparar a mesa.
           </span>
         )}
       </nav>
 
-      {!showfile && <p>Carregando showfile…</p>}
+      {!showfile && <p>Carregando dados do show…</p>}
 
       {showfile && role === 'admin' && tab === 'session' && (
         <section style={ui.panelCard}>
-          <h2 style={{ marginTop: 0 }}>Sessão</h2>
+          <h2 style={{ marginTop: 0 }}>Visão geral</h2>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: 12,
+              marginBottom: 16,
+            }}
+          >
+            {[
+              { title: 'Endereço principal', value: preferredServerApiBase, accent: '#58a6ff' },
+              { title: 'Porta do áudio', value: ':9876', accent: '#2ea043' },
+              { title: 'Porta de controle', value: ':9877', accent: '#fbbc04' },
+              { title: 'Nome do show', value: showfile.name, accent: '#d2a8ff' },
+            ].map((item) => (
+              <div
+                key={item.title}
+                style={{
+                  borderRadius: 16,
+                  border: `1px solid ${item.accent}33`,
+                  background: 'rgba(10,15,23,.64)',
+                  padding: 14,
+                  boxShadow: 'inset 0 1px 0 rgba(255,255,255,.03)',
+                }}
+              >
+                <div style={{ color: '#8ea8c2', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                  {item.title}
+                </div>
+                <div style={{ color: '#f0f6fc', fontWeight: 800, marginTop: 6, wordBreak: 'break-word' }}>{item.value}</div>
+              </div>
+            ))}
+          </div>
           <p>
-            HTTP <code>{preferredServerApiBase}</code> · UDP áudio{' '}
-            <code>:9876</code> · UDP controle <code>:9877</code>
+            Endereço do painel <code>{preferredServerApiBase}</code> · áudio <code>:9876</code>{' '}
+            · controle <code>:9877</code>
           </p>
-          <p>Showfile: {showfile.name}</p>
-          <p>Perfil Wi‑Fi: {showfile.networkProfile}</p>
+          <p>Show atual: {showfile.name}</p>
+                  <p>Tipo de rede: {showfile.networkProfile}</p>
           <p style={{ color: '#9aa0a6', maxWidth: 640 }}>
-            Canais da mesa: com a captura ativa, <strong>Sincronizar canais da interface</strong>{' '}
-            cria <code>if_0</code>… conforme o N definido em <strong>Entrada de áudio</strong>. Depois
-            abre <strong>Canais</strong> para gain/pan (admin) e entra como músico para sends no
-            ouvido.
+            Quando a entrada de áudio estiver ativa, <strong>Sincronizar canais da interface</strong>{' '}
+            cria automaticamente os canais do show conforme a quantidade escolhida em{' '}
+            <strong>Entrada de áudio</strong>. Depois, abra <strong>Mesa</strong> para organizar os
+            canais e ajustar o que cada músico vai ouvir.
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 8 }}>
             <button type="button" onClick={() => refreshShowfile()} style={ui.pillBtn}>
-              Recarregar showfile
+              Atualizar dados
             </button>
             <button
               type="button"
@@ -1032,7 +1195,7 @@ export function AdminApp() {
                 }
               }}
             >
-              Sincronizar faixas (N = max. showfile if_* e N do servidor)
+              Sincronizar canais da interface
             </button>
           </div>
         </section>
@@ -1071,19 +1234,14 @@ export function AdminApp() {
 
       {showfile && role === 'admin' && tab === 'network' && (
         <section style={ui.panelCard}>
-          <h2 style={{ marginTop: 0 }}>Rede e motor de áudio</h2>
-          <p style={{ color: '#9aa0a6', maxWidth: 720 }}>
-            O perfil Wi‑Fi é uma referência operacional. O <strong>bloco PCM</strong> (servidor)
-            define quantas amostras são processadas por tick — valores menores reduzem a
-            latência do PC ao custo de mais CPU e risco de cortes. Isto é independente do
-            perfil <em>pro/low/stable/wifi24</em> do WebSocket no telemóvel (buffer do cliente).
-          </p>
+          <h2 style={{ marginTop: 0 }}>Conexão e resposta do som</h2>
           <div
             style={{
               display: 'grid',
               gap: 10,
-              marginBottom: 18,
-              maxWidth: 720,
+              marginBottom: 16,
+              maxWidth: 920,
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
             }}
           >
             <div
@@ -1094,11 +1252,18 @@ export function AdminApp() {
                 background: '#0d1621',
               }}
             >
-              <strong style={{ color: '#e8eaed' }}>Plano 5 GHz PRO</strong>
+              <div style={{ color: '#8ea8c2', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                Tipo de rede
+              </div>
+              <strong style={{ color: '#e8eaed', display: 'block', marginTop: 6 }}>
+                {showfile.networkProfile === 'wifi_5'
+                  ? '5 GHz recomendado'
+                  : showfile.networkProfile === 'wifi_2_4'
+                    ? '2.4 GHz'
+                    : 'Auto'}
+              </strong>
               <p style={{ color: '#9aa0a6', margin: '8px 0 0', fontSize: 13 }}>
-                Use SSID dedicado ao palco, WMM/QoS na classe de voz, access point com uplink
-                por Ethernet e canal 5 GHz limpo. Prefira 40 MHz em ambientes densos; use 80
-                MHz apenas se o espectro estiver realmente limpo.
+                Use 5 GHz sempre que puder. Em 2.4 GHz, deixe a rede mais estável e sem muita disputa.
               </p>
             </div>
             <div
@@ -1109,20 +1274,25 @@ export function AdminApp() {
                 background: '#10151d',
               }}
             >
-              <strong style={{ color: '#e8eaed' }}>Plano 2,4 GHz</strong>
+              <div style={{ color: '#8ea8c2', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                Resposta do computador
+              </div>
+              <strong style={{ color: '#e8eaed', display: 'block', marginTop: 6 }}>
+                {audioBlockSamples ?? '—'} passos de áudio
+              </strong>
               <p style={{ color: '#9aa0a6', margin: '8px 0 0', fontSize: 13 }}>
-                Use apenas canais 1, 6 ou 11, largura fixa de 20 MHz, WMM/QoS ativo, SSID
-                dedicado ao palco e servidor ligado por Ethernet ao access point.
+                Valores menores deixam o retorno mais rápido, mas podem aumentar o risco de falhas.
               </p>
             </div>
           </div>
-          <h3 style={{ color: '#e8eaed', marginBottom: 8 }}>Medidor de qualidade (por músico)</h3>
+          <h3 style={{ color: '#e8eaed', marginBottom: 8 }}>Como está a conexão de cada integrante</h3>
           <div
           style={{
               display: 'grid',
               gap: 10,
-              marginBottom: 20,
-              maxWidth: 720,
+              marginBottom: 16,
+              maxWidth: 920,
+              gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
             }}
           >
             {showfile.musicians.map((m) => {
@@ -1161,27 +1331,27 @@ export function AdminApp() {
                     <>
                       <p style={{ color: '#9aa0a6', margin: '8px 0 0', fontSize: 13 }}>
                         {q.hint}
-                        {q.rttMs != null ? ` · RTT ~${q.rttMs} ms` : ''}
-                        {q.jitterMs != null ? ` · jitter ~${q.jitterMs} ms` : ''}
+                        {q.rttMs != null ? ` · ida e volta ~${q.rttMs} ms` : ''}
+                        {q.jitterMs != null ? ` · oscilação ~${q.jitterMs} ms` : ''}
                         {q.gapsPerMinute != null
-                          ? ` · ~${q.gapsPerMinute} gaps/min`
+                          ? ` · ~${q.gapsPerMinute} falhas/min`
                           : ''}
                       </p>
                       <p style={{ color: '#9aa0a6', margin: '6px 0 0', fontSize: 12 }}>
-                        SLA &lt; 1000 ms:{' '}
+                        Meta de atraso abaixo de 1000 ms:{' '}
                         <strong
                           style={{ color: q.slaUnder1s ? '#39ff14' : '#f85149' }}
                         >
                           {q.slaUnder1s ? 'OK' : 'ATENCAO'}
                         </strong>
-                        {q.estimatedE2eMs != null ? ` · media e2e ~${q.estimatedE2eMs} ms` : ''}
+                        {q.estimatedE2eMs != null ? ` · média ~${q.estimatedE2eMs} ms` : ''}
                         {q.estimatedE2eP95Ms != null
-                          ? ` · p95 e2e ~${q.estimatedE2eP95Ms} ms`
+                          ? ` · pico comum ~${q.estimatedE2eP95Ms} ms`
                           : ''}
-                        {q.aheadP95Ms != null ? ` · p95 ahead ~${q.aheadP95Ms} ms` : ''}
-                        {q.queueDepthP95 != null ? ` · fila p95 ~${q.queueDepthP95}` : ''}
-                        {q.sampleCount != null ? ` · amostras ${q.sampleCount}` : ''}
-                        {q.slaBreaches ? ` · violacoes ${q.slaBreaches}` : ''}
+                        {q.aheadP95Ms != null ? ` · sobra ~${q.aheadP95Ms} ms` : ''}
+                        {q.queueDepthP95 != null ? ` · fila ~${q.queueDepthP95}` : ''}
+                        {q.sampleCount != null ? ` · leituras ${q.sampleCount}` : ''}
+                        {q.slaBreaches ? ` · fora da meta ${q.slaBreaches}` : ''}
                       </p>
                       {q.recommendations && q.recommendations.length > 0 ? (
                         <ul style={{ color: '#8b949e', margin: '8px 0 0', paddingLeft: 18 }}>
@@ -1195,18 +1365,18 @@ export function AdminApp() {
                     </>
                   ) : (
                     <p style={{ color: '#6e7681', margin: '8px 0 0', fontSize: 13 }}>
-                      Sem telemetria — o músico ainda não abriu o retorno WebSocket.
+                      Ainda sem dados desse integrante. O retorno precisa estar aberto no celular.
                     </p>
                   )}
                 </div>
               )
             })}
           </div>
-          <h3 style={{ color: '#e8eaed', marginBottom: 8 }}>Bloco PCM do servidor</h3>
-          <p style={{ color: '#9aa0a6', marginTop: 0 }}>
+          <h3 style={{ color: '#e8eaed', marginBottom: 8 }}>Velocidade de resposta do computador</h3>
+          <p style={{ color: '#9aa0a6', marginTop: 0, marginBottom: 10 }}>
             Atual:{' '}
             <strong style={{ color: '#e8eaed' }}>
-              {audioBlockSamples ?? '—'} amostras @ 48 kHz (~
+              {audioBlockSamples ?? '—'} passos (~
               {audioBlockSamples
                 ? ((audioBlockSamples / 48000) * 1000).toFixed(2)
                 : '?'}
@@ -1239,15 +1409,11 @@ export function AdminApp() {
                   ...(audioBlockSamples === n ? ui.tabBtnActive : {}),
                 }}
               >
-                {n} smp
+                {n}
               </button>
             ))}
           </div>
-          <h3 style={{ color: '#e8eaed', marginBottom: 8 }}>Perfil Wi‑Fi (referência)</h3>
-          <p style={{ color: '#9aa0a6', maxWidth: 640 }}>
-            Em palco prefira <strong>5 GHz</strong> dedicado; ligue o servidor por cabo ao
-            access point quando possível.
-          </p>
+          <h3 style={{ color: '#e8eaed', marginBottom: 8 }}>Tipo de rede usada no palco</h3>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {(['wifi_2_4', 'wifi_5', 'auto'] as const).map((p) => (
               <button
@@ -1259,7 +1425,7 @@ export function AdminApp() {
                   ...(showfile.networkProfile === p ? ui.tabBtnActive : {}),
                 }}
               >
-                {p}
+                {p === 'wifi_5' ? '5 GHz' : p === 'wifi_2_4' ? '2.4 GHz' : 'Automático'}
               </button>
             ))}
           </div>
@@ -1268,16 +1434,19 @@ export function AdminApp() {
 
       {showfile && role === 'admin' && tab === 'pairing' && (
         <section style={ui.panelCard}>
-          <h2>Código para músicos</h2>
+          <h2>Código de acesso para músicos</h2>
+          <p style={{ color: '#9aa0a6', marginTop: 0 }}>
+            Gere um código rápido para o músico entrar no retorno sem digitar usuário e senha.
+          </p>
           <button type="button" onClick={generatePairing} style={ui.pillBtn}>
-            Gerar código (6 dígitos)
+            Gerar código de 6 dígitos
           </button>
           {pairCode && (
             <p style={{ fontSize: 28, letterSpacing: 6 }}>{pairCode}</p>
           )}
           {pairExpiry && (
             <p style={{ color: '#9aa0a6' }}>
-              expira em {new Date(pairExpiry).toLocaleString()}
+              Válido até {new Date(pairExpiry).toLocaleString()}
             </p>
           )}
         </section>
@@ -1294,10 +1463,8 @@ export function AdminApp() {
         >
           <h2 style={{ marginTop: 0 }}>Perfil de músico não encontrado</h2>
           <p style={{ color: '#e8eaed' }}>
-            O token não corresponde a nenhum <code>username</code> em{' '}
-            <code>showfile.musicians</code>. Volta a entrar com{' '}
-            <code>musician1</code> / <code>musician1</code> (ou o par correto deste
-            showfile).
+            Este acesso não combina com nenhum músico cadastrado neste show. Entre novamente com
+            o usuário e a senha corretos.
           </p>
         </section>
       )}
@@ -1770,7 +1937,7 @@ function MacAudioInputsPanel({
   if (!data) {
     return (
       <section>
-        <h2>Entrada de áudio do desktop</h2>
+        <h2>Escolha da entrada de áudio</h2>
         <p>A carregar…</p>
       </section>
     )
@@ -1778,21 +1945,29 @@ function MacAudioInputsPanel({
 
   return (
     <section>
-      <h2>Entrada de áudio do desktop (Windows/macOS)</h2>
-      <p style={{ color: '#9aa0a6', maxWidth: 720 }}>
-        O servidor <strong>lista as entradas</strong> com o <code>ffmpeg</code>: no{' '}
-        <strong>macOS</strong> via AVFoundation; no <strong>Windows</strong> via DirectShow
-        (<code>dshow</code>). Na aplicação <strong>inEar Desktop</strong> (Electron), ao abrir a
-        janela o <strong>macOS</strong> ou o <strong>Windows</strong> pode mostrar um pedido de
-        acesso ao <strong>microfone</strong> — aceita para o sistema permitir listar e capturar
-        áudio. Podes voltar a pedir com o botão <strong>Pedir permissão de microfone</strong> abaixo.
-        Em modo <strong>automático</strong>, tenta reconhecer interfaces comuns (ex. Focusrite,
-        Zoom, VB-Audio/CABLE…). No macOS, para várias interfaces, usa um <strong>dispositivo
-        agregado</strong> no Utilitário Áudio MIDI. Opcional:{' '}
-        <code>INEAR_CAPTURE_DEVICE_SUBSTRING=nome</code>. Estado em <code>inear-state.json</code>.
-        Se <code>INEAR_CAPTURE_CMD</code> existir, tem prioridade. No instalador Windows o{' '}
-        <code>ffmpeg</code> vai embutido; em dev podes usar PATH ou <code>INEAR_FFMPEG</code>.
-      </p>
+      <h2>Escolha da entrada de áudio</h2>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gap: 10,
+          maxWidth: 920,
+          marginBottom: 12,
+        }}
+      >
+        <div style={{ border: '1px solid #334861', borderRadius: 12, padding: 12, background: '#0f1722' }}>
+          <div style={{ color: '#8ea8c2', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.08em' }}>Sistema</div>
+          <strong style={{ color: '#e8eaed', display: 'block', marginTop: 6 }}>{data.platform === 'win32' ? 'Windows / DirectShow' : data.platform === 'darwin' ? 'macOS / AVFoundation' : data.platform}</strong>
+        </div>
+        <div style={{ border: '1px solid #334861', borderRadius: 12, padding: 12, background: '#0f1722' }}>
+          <div style={{ color: '#8ea8c2', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.08em' }}>Escolha atual</div>
+          <strong style={{ color: '#e8eaed', display: 'block', marginTop: 6 }}>{data.captureMode === 'auto' ? 'Automática' : data.captureMode === 'manual' ? 'Manual' : 'Desligada'}</strong>
+        </div>
+        <div style={{ border: '1px solid #334861', borderRadius: 12, padding: 12, background: '#0f1722' }}>
+          <div style={{ color: '#8ea8c2', fontSize: 11, textTransform: 'uppercase', letterSpacing: '.08em' }}>Entrada em uso</div>
+          <strong style={{ color: '#e8eaed', display: 'block', marginTop: 6 }}>{data.captureSource === 'dshow' ? 'Entrada do Windows' : data.captureSource === 'avfoundation' ? 'Entrada do macOS' : data.captureSource === 'env' ? 'Comando manual' : 'Nenhuma'}</strong>
+        </div>
+      </div>
       {data.platform === 'darwin' && data.captureSource !== 'env' ? (
         <div
           style={{
@@ -1805,12 +1980,10 @@ function MacAudioInputsPanel({
           }}
         >
           <h3 style={{ marginTop: 0, marginBottom: 10, fontSize: 15, color: '#58a6ff' }}>
-            Avid + Studio M ao mesmo tempo (porque só vês L/R de um dispositivo)
+            Quer usar duas interfaces ao mesmo tempo?
           </h3>
           <p style={{ color: '#e8eaed', lineHeight: 1.55, marginBottom: 10 }}>
-            O inEar captura <strong>um único</strong> fluxo PCM por vez. Se escolheres só a{' '}
-            <strong>Studio M</strong>, o macOS entrega em geral <strong>2 canais</strong>{' '}
-            (L/R) — não há como “somar” a Avid nesse mesmo fluxo sem um passo no Mac.
+            O app lê uma entrada de áudio por vez. No Mac, se quiser juntar duas interfaces, crie antes um dispositivo agregado.
           </p>
           <ol
             style={{
@@ -1837,14 +2010,13 @@ function MacAudioInputsPanel({
               (modo manual ou ajusta <code>INEAR_CAPTURE_DEVICE_SUBSTRING</code> ao nome).
             </li>
             <li>
-              Clica <strong>Provar todos (ffprobe)</strong> e confirma quantas entradas PCM
+              Clica <strong>Provar todos</strong> e confirma quantos canais
               aparecem (ex. 4 se forem 2+2 estéreo). Liga <strong>N automático</strong> ou
               escreve <strong>N</strong> à mão.
             </li>
             <li>
-              <strong>Aplicar N + ganhos</strong>, depois <strong>Sincronizar faixas</strong> —
-              no separador <strong>Canais</strong> renomeia <code>if_0</code>… para saberes qual
-              é Avid L, Avid R, Studio L, Studio R (conferir ordem no agregado).
+              <strong>Aplicar ajustes</strong>, depois <strong>Sincronizar canais</strong> —
+              no separador <strong>Canais</strong> pode renomear as entradas para ficar mais fácil de identificar.
             </li>
           </ol>
         </div>
@@ -1873,27 +2045,26 @@ function MacAudioInputsPanel({
       ) : null}
       {data.captureSource === 'env' ? (
         <p style={{ color: '#fdd663', marginTop: 12 }}>
-          Captura ativa via variável de ambiente <code>INEAR_CAPTURE_CMD</code> (prioridade
-          sobre a escolha abaixo).
+          A entrada está a ser controlada por um comando manual (<code>INEAR_CAPTURE_CMD</code>).
         </p>
       ) : null}
       {data.suggestedDevice && data.captureMode === 'auto' ? (
         <p style={{ marginTop: 12, color: '#81c995' }}>
-          <strong>Heurística (automático):</strong> sugerido{' '}
+          <strong>Sugestão automática:</strong>{' '}
           <code>[{data.suggestedDevice.index}]</code> {data.suggestedDevice.name}
         </p>
       ) : null}
       {data.captureSource === 'avfoundation' || data.captureSource === 'dshow' ? (
         <p style={{ marginTop: 12 }}>
-          <strong>Captura ativa:</strong>{' '}
+          <strong>Entrada ativa:</strong>{' '}
           {data.captureSource === 'dshow' ? (
-            <span style={{ color: '#9aa0a6' }}>DirectShow · </span>
+            <span style={{ color: '#9aa0a6' }}>Windows · </span>
           ) : null}
           {data.effectiveDeviceName != null
             ? `[${data.effectiveAvfoundationAudioIndex}] ${data.effectiveDeviceName}`
             : `índice :${data.effectiveAvfoundationAudioIndex}`}
           {data.autoPicked ? (
-            <span style={{ color: '#9aa0a6' }}> · detetado automaticamente</span>
+            <span style={{ color: '#9aa0a6' }}> · escolhida automaticamente</span>
           ) : null}
           <span style={{ color: '#9aa0a6' }}>
             {' '}
@@ -1901,83 +2072,92 @@ function MacAudioInputsPanel({
           </span>
           {typeof data.effectiveProbedInputChannels === 'number' ? (
             <span style={{ color: '#81c995', display: 'block', marginTop: 6 }}>
-              ffprobe: esta entrada expõe <strong>{data.effectiveProbedInputChannels}</strong>{' '}
-              canal(is) PCM ao ffmpeg. Com &quot;N automático&quot; ligado, o servidor usa este
-              valor ao reiniciar a captura.
+              Esta entrada tem <strong>{data.effectiveProbedInputChannels}</strong>{' '}
+              canal(is) disponíveis. Se o N automático estiver ligado, esse valor será usado ao reiniciar.
             </span>
           ) : data.effectiveProbeError ? (
             <span style={{ color: '#f0883e', display: 'block', marginTop: 6 }}>
-              ffprobe (entrada efetiva): {data.effectiveProbeError}
+              Não foi possível confirmar os canais desta entrada: {data.effectiveProbeError}
             </span>
           ) : null}
         </p>
       ) : (data.platform === 'darwin' || data.platform === 'win32') &&
         data.captureSource === 'none' ? (
         <p style={{ marginTop: 12, color: '#9aa0a6' }}>
-          Sem entrada de áudio nativa resolvida (modo <code>{data.captureMode}</code>
+          Nenhuma entrada foi encontrada no momento (modo <code>{data.captureMode}</code>
           {data.captureMode === 'auto'
-            ? ' — nenhum dispositivo correspondeu à heurística ou lista vazia'
+            ? ' — nenhuma opção compatível foi encontrada'
             : ''}
-          ). O mix usa tons de teste ou define <code>INEAR_CAPTURE_CMD</code>.
+          ). O app fica em teste até você escolher uma entrada válida.
         </p>
       ) : null}
       {audioDebug ? (
-        <div
+        <details
           style={{
             marginTop: 14,
-            padding: 14,
             borderRadius: 10,
             border: '1px solid #334861',
             background: '#101926',
             color: '#dbe6f3',
             maxWidth: 920,
-            display: 'grid',
-            gap: 6,
+            overflow: 'hidden',
           }}
         >
-          <strong>Diagnóstico de captura e envio</strong>
-          <div style={{ fontSize: 13, color: '#9ab8d8' }}>
-            Fonte: {audioDebug.captureSource || 'none'} · modo {audioDebug.captureMode || 'n/a'} ·
-            dispositivo {audioDebug.captureDeviceName || 'n/a'}
-          </div>
-          <div style={{ fontSize: 13, color: '#9ab8d8' }}>
-            PCM: {audioDebug.receiving ? 'recebendo' : 'sem PCM'} · child{' '}
-            {audioDebug.captureChildRunning ? 'ativo' : 'parado'} · ultimo bloco{' '}
-            {audioDebug.captureLastGoodMsAgo ?? '-'} ms atras · underruns{' '}
-            {audioDebug.captureUnderruns}
-          </div>
-          <div style={{ fontSize: 13, color: '#9ab8d8' }}>
-            Envio: UDP {audioDebug.udpTargetCount} alvo(s), ultimo envio{' '}
-            {audioDebug.lastUdpSendMsAgo ?? '-'} ms atras · WS {audioDebug.wsClientCount}, ultimo
-            envio {audioDebug.lastWsSendMsAgo ?? '-'} ms atras
-          </div>
-          <div style={{ fontSize: 13, color: '#9ab8d8' }}>
-            ffmpeg: <code>{audioDebug.ffmpegPath || 'nao encontrado'}</code>
-          </div>
-          {audioDebug.captureLastError ? (
-            <div style={{ fontSize: 13, color: '#f0883e' }}>
-              Ultimo erro: {audioDebug.captureLastError}
+          <summary
+            style={{
+              cursor: 'pointer',
+              padding: 14,
+              fontWeight: 800,
+              color: '#dbe6f3',
+              listStyle: 'none',
+            }}
+          >
+            Diagnóstico avançado
+          </summary>
+          <div style={{ display: 'grid', gap: 6, padding: '0 14px 14px' }}>
+            <div style={{ fontSize: 13, color: '#9ab8d8' }}>
+              Fonte: {audioDebug.captureSource || 'none'} · modo {audioDebug.captureMode || 'n/a'} ·
+              dispositivo {audioDebug.captureDeviceName || 'n/a'}
             </div>
-          ) : null}
-          {audioDebug.captureStderrTail?.length ? (
-            <pre
-              style={{
-                margin: 0,
-                padding: 10,
-                borderRadius: 8,
-                background: '#0d1117',
-                border: '1px solid #30363d',
-                color: '#c9d1d9',
-                fontSize: 12,
-                lineHeight: 1.45,
-                overflowX: 'auto',
-                whiteSpace: 'pre-wrap',
-              }}
-            >
-              {audioDebug.captureStderrTail.join('\n')}
-            </pre>
-          ) : null}
-        </div>
+            <div style={{ fontSize: 13, color: '#9ab8d8' }}>
+              PCM: {audioDebug.receiving ? 'recebendo' : 'sem PCM'} · child{' '}
+              {audioDebug.captureChildRunning ? 'ativo' : 'parado'} · ultimo bloco{' '}
+              {audioDebug.captureLastGoodMsAgo ?? '-'} ms atras · underruns{' '}
+              {audioDebug.captureUnderruns}
+            </div>
+            <div style={{ fontSize: 13, color: '#9ab8d8' }}>
+              Envio: UDP {audioDebug.udpTargetCount} alvo(s), ultimo envio{' '}
+              {audioDebug.lastUdpSendMsAgo ?? '-'} ms atras · WS {audioDebug.wsClientCount}, ultimo
+              envio {audioDebug.lastWsSendMsAgo ?? '-'} ms atras
+            </div>
+            <div style={{ fontSize: 13, color: '#9ab8d8' }}>
+              ffmpeg: <code>{audioDebug.ffmpegPath || 'nao encontrado'}</code>
+            </div>
+            {audioDebug.captureLastError ? (
+              <div style={{ fontSize: 13, color: '#f0883e' }}>
+                Ultimo erro: {audioDebug.captureLastError}
+              </div>
+            ) : null}
+            {audioDebug.captureStderrTail?.length ? (
+              <pre
+                style={{
+                  margin: 0,
+                  padding: 10,
+                  borderRadius: 8,
+                  background: '#0d1117',
+                  border: '1px solid #30363d',
+                  color: '#c9d1d9',
+                  fontSize: 12,
+                  lineHeight: 1.45,
+                  overflowX: 'auto',
+                  whiteSpace: 'pre-wrap',
+                }}
+              >
+                {audioDebug.captureStderrTail.join('\n')}
+              </pre>
+            ) : null}
+          </div>
+        </details>
       ) : null}
       {data.devices.length === 0 && data.platform === 'darwin' ? (
         <p style={{ color: '#f28b82', marginTop: 8 }}>
@@ -2114,7 +2294,7 @@ function MacAudioInputsPanel({
       {data.devices.length > 0 ? (
         <div style={{ marginTop: 16 }}>
           <h3 style={{ fontSize: 15, marginBottom: 8 }}>
-            Dispositivos de entrada — interface / endpoint e PCM (ffprobe)
+            Entradas encontradas
           </h3>
           {data.ffprobeFound === false ? (
             <p
@@ -2137,7 +2317,7 @@ function MacAudioInputsPanel({
           ) : null}
           <div
             style={{
-              maxHeight: 320,
+              maxHeight: 240,
               overflow: 'auto',
               border: '1px solid #394457',
               borderRadius: 8,
@@ -2158,16 +2338,16 @@ function MacAudioInputsPanel({
                     #
                   </th>
                   <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #394457' }}>
-                    Interface / driver
+                    Interface
                   </th>
                   <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #394457' }}>
-                    Entrada (endpoint)
+                    Entrada
                   </th>
                   <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #394457' }}>
-                    Entradas PCM
+                    Canais
                   </th>
                   <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #394457' }}>
-                    Nota
+                    Observação
                   </th>
                 </tr>
               </thead>
@@ -2178,10 +2358,10 @@ function MacAudioInputsPanel({
                   const { entrada, interfaceDriver } = splitAudioDeviceEndpointName(d.name)
                   const note =
                     n != null
-                      ? 'Medido com ffprobe nesta carga (ou em cache recente).'
+                      ? 'Canais confirmados.'
                       : err
                         ? err
-                        : 'Sem medição para este índice nesta carga — clica «Provar todos (ffprobe)».'
+                        : 'Ainda não foi medido. Use "Provar todos" se quiser conferir.'
                   return (
                     <Fragment key={d.index}>
                       <tr style={{ borderBottom: '1px solid #30363d' }}>
@@ -2251,33 +2431,43 @@ function MacAudioInputsPanel({
             </table>
           </div>
           <p style={{ margin: '10px 0 0', fontSize: 12, color: '#9aa0a6', maxWidth: 820 }}>
-            «<strong>Provar todos</strong>» corre ffprobe em <em>cada</em> linha (pode demorar). «
-            <strong>+ pins DirectShow</strong>» faz o mesmo e ainda corre <code>-list_options</code> por
-            dispositivo (bem mais lento). Sem isso, só aparecem medições para a entrada em uso, a
-            sugerida pela heurística, ou valores em cache de há poucos segundos.
+            "Provar todos" confirma os canais de cada entrada. No Windows, "Provar + pins" demora mais.
           </p>
         </div>
       ) : null}
       {canEdit &&
       (data.platform === 'darwin' || data.platform === 'win32') &&
       data.captureSource !== 'env' ? (
-        <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            Usar entrada
+        <div
+          style={{
+            marginTop: 12,
+            display: 'grid',
+            gap: 10,
+            maxWidth: 920,
+            padding: 14,
+            borderRadius: 12,
+            border: '1px solid #334861',
+            background: '#0f1722',
+          }}
+        >
+          <label style={{ display: 'grid', gap: 8 }}>
+            <span style={{ color: '#dbe6f3', fontWeight: 700 }}>Entrada que será usada</span>
             <select
               value={selectVal}
               onChange={(e) => setSelectVal(e.target.value)}
               style={{
                 minWidth: 220,
-                padding: '4px 8px',
+                padding: '9px 10px',
                 background: '#252a33',
                 color: '#e8eaed',
                 border: '1px solid #555',
                 borderRadius: 6,
+                width: '100%',
+                maxWidth: 520,
               }}
             >
-              <option value={SEL_AUTO}>— deteção automática (reconhece interface) —</option>
-              <option value={SEL_OFF}>— desligado (tons de teste) —</option>
+              <option value={SEL_AUTO}>— escolher automaticamente —</option>
+              <option value={SEL_OFF}>— desligado / teste —</option>
               {data.devices.map((d) => (
                 <option key={d.index} value={String(d.index)}>
                   [{d.index}] {d.name}
@@ -2285,44 +2475,46 @@ function MacAudioInputsPanel({
               ))}
             </select>
           </label>
-          <button type="button" style={compactBtnStyle} disabled={busy} onClick={() => void applySelection('save')}>
-            Aplicar
-          </button>
-          <button type="button" style={compactBtnStyle} disabled={busy} onClick={() => void applySelection('clear')}>
-            Só desligar
-          </button>
-          <button type="button" style={compactBtnStyle} disabled={busy} onClick={() => void load(true)}>
-            Atualizar lista
-          </button>
-          <button
-            type="button"
-            style={compactBtnStyle}
-            disabled={busy || permBusy}
-            title="Mostra o pedido do macOS ou do Windows para microfone / captura de áudio"
-            onClick={() => void requestOsMicPermission()}
-          >
-            Pedir permissão de microfone
-          </button>
-          <button
-            type="button"
-            style={compactBtnStyle}
-            disabled={busy}
-            title="Corre ffprobe em cada dispositivo (pode demorar)"
-            onClick={() => void load(true, true)}
-          >
-            Provar todos (ffprobe)
-          </button>
-          {data.platform === 'win32' ? (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <button type="button" style={compactBtnStyle} disabled={busy} onClick={() => void applySelection('save')}>
+              Aplicar
+            </button>
+            <button type="button" style={compactBtnStyle} disabled={busy} onClick={() => void applySelection('clear')}>
+              Só desligar
+            </button>
+            <button type="button" style={compactBtnStyle} disabled={busy} onClick={() => void load(true)}>
+              Atualizar lista
+            </button>
+            <button
+              type="button"
+              style={compactBtnStyle}
+              disabled={busy || permBusy}
+              title="Mostra o pedido do macOS ou do Windows para microfone / captura de áudio"
+              onClick={() => void requestOsMicPermission()}
+            >
+              Liberar acesso
+            </button>
             <button
               type="button"
               style={compactBtnStyle}
               disabled={busy}
-              title="ffprobe + list_options DirectShow por dispositivo — muito lento"
-              onClick={() => void load(true, true, true)}
+              title="Corre ffprobe em cada dispositivo (pode demorar)"
+              onClick={() => void load(true, true)}
             >
-              Provar todos + pins DirectShow
+              Provar todos
             </button>
-          ) : null}
+            {data.platform === 'win32' ? (
+              <button
+                type="button"
+                style={compactBtnStyle}
+                disabled={busy}
+                title="ffprobe + list_options DirectShow por dispositivo — muito lento"
+                onClick={() => void load(true, true, true)}
+              >
+                Provar + pins
+              </button>
+            ) : null}
+          </div>
         </div>
       ) : null}
       {!canEdit && data.platform === 'darwin' && data.devices.length > 0 ? (
@@ -2334,19 +2526,14 @@ function MacAudioInputsPanel({
       {data.captureInputMatrix ? (
         <div
           style={{
-            marginTop: 28,
+            marginTop: 20,
             borderTop: '1px solid #394457',
-            paddingTop: 20,
+            paddingTop: 16,
           }}
         >
-          <h3 style={{ fontSize: 15, marginBottom: 8 }}>Mesa multi-canal (captura única)</h3>
-          <p style={{ color: '#9aa0a6', maxWidth: 760, marginBottom: 14, lineHeight: 1.5 }}>
-            <strong>N</strong> = canais no fluxo PCM (dispositivo agregado). Ganhos por entrada
-            física (índice 0…N−1) aplicam-se antes do mix. <strong>Sincronizar</strong> cria
-            faixas <code>if_0</code>…<code>if_{Math.max(0, captureChCount - 1)}</code> com nomes
-            no separador Canais. O macOS lista <strong>um dispositivo por interface</strong> (ex.{' '}
-            Studio M = muitas vezes só 2 canais L/R); microfone integrado aparece como outra
-            linha — combina tudo num <strong>agregado</strong> se precisares de N maior.
+          <h3 style={{ fontSize: 15, marginBottom: 8 }}>Canais da entrada</h3>
+          <p style={{ color: '#9aa0a6', maxWidth: 760, marginBottom: 12, lineHeight: 1.45 }}>
+            Aqui você define quantos canais quer usar e prepara os canais que vão aparecer no separador Canais.
           </p>
           {canEdit ? (
             <label style={{ color: '#e8eaed', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
@@ -2355,12 +2542,12 @@ function MacAudioInputsPanel({
                 checked={channelCountAuto}
                 onChange={(e) => setChannelCountAuto(e.target.checked)}
               />
-              Ajustar N automaticamente com ffprobe ao reiniciar captura
+              Ajustar sozinho a quantidade de canais ao reiniciar
             </label>
           ) : null}
           {canEdit ? (
             <label style={{ color: '#e8eaed', display: 'block', marginBottom: 16 }}>
-              Número de entradas no PCM (N), 1–{MVP_MAX_CAPTURE_CHANNELS}
+              Quantidade de canais a usar, 1–{MVP_MAX_CAPTURE_CHANNELS}
               <input
                 type="number"
                 min={1}
@@ -2379,10 +2566,10 @@ function MacAudioInputsPanel({
                   )
                 }
                 style={{
-                  display: 'block',
-                  marginTop: 6,
-                  width: 120,
-                  padding: 8,
+              display: 'block',
+              marginTop: 6,
+              width: 120,
+              padding: 8,
                   background: '#252a33',
                   color: '#e8eaed',
                   border: '1px solid #555',
@@ -2392,78 +2579,94 @@ function MacAudioInputsPanel({
             </label>
           ) : (
             <p style={{ color: '#9aa0a6', marginBottom: 12 }}>
-              N = {data.captureChannelCount} canais na captura
+              Canais em uso: {data.captureChannelCount}
             </p>
           )}
-          <div
+          <details
             style={{
-              marginBottom: 16,
-              maxHeight: 360,
-              overflowY: 'auto',
+              marginBottom: 14,
               border: '1px solid #394457',
               borderRadius: 8,
-              padding: 12,
+              background: '#0f1722',
+              overflow: 'hidden',
             }}
           >
-            <div style={{ color: '#9aa0a6', fontSize: 12, marginBottom: 10, lineHeight: 1.45 }}>
-              Ganhos por entrada PCM (uma barra por índice 0…N−1). Com N=5 vês cinco faders; em
-              <strong> Canais</strong> ajustas gain/pan por faixa <code>if_*</code>. Aplica com o
-              botão abaixo.
-            </div>
-            {Array.from({ length: captureChCount }, (_, i) => (
-              <label
-                key={i}
-                style={{ color: '#e8eaed', display: 'block', marginBottom: 10 }}
-              >
-                Entrada PCM {i}
-                {captureChCount === 2 && (i === 0 || i === 1) ? (
-                  <span style={{ color: '#6e7681', fontSize: 11 }}>
-                    {' '}
-                    ({i === 0 ? 'L' : 'R'} estéreo)
+            <summary
+              style={{
+                cursor: 'pointer',
+                padding: 12,
+                color: '#dbe6f3',
+                fontWeight: 700,
+                listStyle: 'none',
+              }}
+            >
+              Ajustar volumes de cada canal
+            </summary>
+            <div
+              style={{
+                padding: '0 12px 12px',
+                maxHeight: 280,
+                overflowY: 'auto',
+              }}
+            >
+              <div style={{ color: '#9aa0a6', fontSize: 12, marginBottom: 10, lineHeight: 1.45 }}>
+                Abra este bloco só quando quiser mexer no volume bruto de cada canal.
+              </div>
+              {Array.from({ length: captureChCount }, (_, i) => (
+                <label
+                  key={i}
+                  style={{ color: '#e8eaed', display: 'block', marginBottom: 10 }}
+                >
+                  Canal {i + 1}
+                  {captureChCount === 2 && (i === 0 || i === 1) ? (
+                    <span style={{ color: '#6e7681', fontSize: 11 }}>
+                      {' '}
+                      ({i === 0 ? 'esquerdo' : 'direito'})
+                    </span>
+                  ) : null}
+                  <input
+                    className="inearRange"
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    disabled={!canEdit}
+                    value={gainByIndex[String(i)] ?? 1}
+                    onChange={(e) =>
+                      setGainByIndex((prev) => ({
+                        ...prev,
+                        [String(i)]: Number(e.target.value),
+                      }))
+                    }
+                    style={{
+                      ...sliderFillStyle(gainByIndex[String(i)] ?? 1, 0, 1),
+                      display: 'block',
+                      width: '100%',
+                      maxWidth: 420,
+                      marginTop: 6,
+                    }}
+                  />
+                  <div className="faderMarks">
+                    <span>-80</span>
+                    <span>-24</span>
+                    <span>-12</span>
+                    <span>-6</span>
+                    <span>0 dB</span>
+                  </div>
+                  <span style={{ fontSize: 12, color: '#9aa0a6' }}>
+                    {linearToDb(gainByIndex[String(i)] ?? 1)} dB
                   </span>
-                ) : null}
-                <input
-                  className="inearRange"
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  disabled={!canEdit}
-                  value={gainByIndex[String(i)] ?? 1}
-                  onChange={(e) =>
-                    setGainByIndex((prev) => ({
-                      ...prev,
-                      [String(i)]: Number(e.target.value),
-                    }))
-                  }
-                  style={{
-                    ...sliderFillStyle(gainByIndex[String(i)] ?? 1, 0, 1),
-                    display: 'block',
-                    width: '100%',
-                    maxWidth: 420,
-                    marginTop: 6,
-                  }}
-                />
-                <div className="faderMarks">
-                  <span>-80</span>
-                  <span>-24</span>
-                  <span>-12</span>
-                  <span>-6</span>
-                  <span>0 dB</span>
-                </div>
-                <span style={{ fontSize: 12, color: '#9aa0a6' }}>
-                  {linearToDb(gainByIndex[String(i)] ?? 1)} dB
-                </span>
-              </label>
-            ))}
-          </div>
+                </label>
+              ))}
+            </div>
+          </details>
           {canEdit ? (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
               <button type="button" disabled={busy} onClick={() => void applyCaptureGains()}>
-                Aplicar N + ganhos (reinicia captura)
+                Aplicar ajustes
               </button>
               <button type="button" disabled={busy} onClick={() => void syncInterfaceChannels()}>
-                Sincronizar faixas da mesa (if_0 …)
+                Sincronizar canais
               </button>
             </div>
           ) : null}
@@ -2699,13 +2902,11 @@ function ChannelTable({
   if (showfile.channels.length === 0) {
     return (
       <section style={{ maxWidth: 640 }}>
-        <h2 style={{ marginTop: 0 }}>Canais (0)</h2>
+        <h2 style={{ marginTop: 0 }}>Mesa vazia</h2>
         <p style={{ color: '#e8eaed', lineHeight: 1.5 }}>
-          Ainda não há faixas da mesa neste projeto. Ligue a captura (Entrada de áudio ou{' '}
-          <code>INEAR_CAPTURE_CMD</code>) e use{' '}
-          <strong>Sincronizar faixas</strong> em <strong>Sessão</strong> ou{' '}
-          <strong>Entrada de áudio</strong> (define N) — surgem <code>if_0</code>… com faders
-          gain/pan/EQ aqui.
+          Ainda não há canais preparados neste show. Ligue a entrada de áudio e use{' '}
+          <strong>Sincronizar canais da interface</strong> em <strong>Início</strong> ou em{' '}
+          <strong>Entrada de áudio</strong>. Depois os controles da mesa aparecem aqui.
         </p>
         <button type="button" onClick={() => onSaved()}>
           Recarregar
@@ -2721,13 +2922,13 @@ function ChannelTable({
         const accent = channelAccentColor(ch)
         const srcLabel =
           typeof ch.captureInputIndex === 'number'
-            ? `PCM ${ch.captureInputIndex}`
+            ? `Entrada ${ch.captureInputIndex + 1}`
             : ch.sourceTap === 'L'
-              ? 'PCM L'
+              ? 'Esquerdo'
               : ch.sourceTap === 'R'
-                ? 'PCM R'
+                ? 'Direito'
                 : ch.sourceTap === 'sum'
-                  ? 'Soma'
+                  ? 'Mix geral'
                   : (ch.sourceTap ?? '—')
         return (
           <div
@@ -2778,7 +2979,7 @@ function ChannelTable({
                     }))
                   }
                 >
-                  <option value="">Icone padrao</option>
+                  <option value="">Ícone padrão</option>
                   {CHANNEL_ICON_OPTIONS.map((opt) => (
                     <option key={opt.id} value={opt.id}>
                       {opt.badge} - {opt.label}
@@ -2853,12 +3054,12 @@ function ChannelTable({
                   onSaved()
                 }}
               />
-              Bloquear canais
+              Travar EQ
             </label>
 
             <div className="panInline" style={{ margin: '0 0 5px', maxWidth: '100%', width: '100%' }}>
               <div className="panInline__head">
-                <span>Pan</span>
+                <span>Posição</span>
                 <span>{ch.pan.toFixed(2)}</span>
               </div>
                     <input

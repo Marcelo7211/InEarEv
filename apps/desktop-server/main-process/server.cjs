@@ -1513,7 +1513,7 @@ function createServices(app) {
   const WEBRTC_PCM_SAMPLES_STEREO = WEBRTC_PCM_FRAMES_PER_PUSH * 2
 
   /**
-   * @type {Map<string, { id: string, pc: any, source: any, track: any, pcmPending?: Int16Array, pcmPendingUsed?: number }>}
+   * @type {Map<string, { id: string, pc: any, source: any, track: any, latencyProfile?: string, pcmPending?: Int16Array, pcmPendingUsed?: number, lastAudioPushAt?: number }>}
    */
   const webrtcSessions = new Map()
   /** @type {Map<string, Set<string>>} */
@@ -1574,6 +1574,7 @@ function createServices(app) {
     return Array.from(webrtcSessions.entries()).map(([sessionId, sess]) => ({
       sessionId,
       musicianId: sess && sess.id ? sess.id : null,
+      latencyProfile: sess && sess.latencyProfile ? String(sess.latencyProfile) : 'stable',
       connectionState:
         sess && sess.pc && sess.pc.connectionState ? String(sess.pc.connectionState) : null,
       iceConnectionState:
@@ -1588,6 +1589,12 @@ function createServices(app) {
         sess && sess.lastAudioPushAt ? Math.max(0, Date.now() - sess.lastAudioPushAt) : null,
     }))
   }
+  function hasActiveWebRtcLatencyProfile(profile) {
+    for (const sess of webrtcSessions.values()) {
+      if (sess && sess.latencyProfile === profile) return true
+    }
+    return false
+  }
   const muteRampByMusician = new Map()
   let audioSeq = 0
   let sampleClock = 0
@@ -1595,7 +1602,9 @@ function createServices(app) {
   let nextAudioTickAt = Date.now()
 
   function audioBlockSamples() {
-    return clampAudioBlockSamples(state.audioBlockSamples)
+    const configured = clampAudioBlockSamples(state.audioBlockSamples)
+    if (process.platform === 'win32' && hasActiveWebRtcLatencyProfile('provocal')) return 64
+    return configured
   }
 
   function avgSample(values) {
@@ -1881,7 +1890,12 @@ function createServices(app) {
   function captureBufferSoftCapBytes(blockSamples, nCh) {
     const bytesPerFrame = Math.max(1, nCh) * 2
     const minBlockBytes = Math.max(1, blockSamples) * bytesPerFrame
-    const targetMs = process.platform === 'win32' ? 40 : 80
+    const targetMs =
+      process.platform === 'win32'
+        ? hasActiveWebRtcLatencyProfile('provocal')
+          ? 24
+          : 40
+        : 80
     const targetBytes = Math.round((MVP_SAMPLE_RATE_HZ * bytesPerFrame * targetMs) / 1000)
     return Math.max(minBlockBytes * 2, targetBytes)
   }
@@ -3048,7 +3062,7 @@ function createServices(app) {
       if (!localAnswerSdp || !String(localAnswerSdp).trim()) {
         throw new Error('local_answer_sdp_empty')
       }
-      webrtcSessions.set(sessionId, { id: strip.id, pc, source, track })
+      webrtcSessions.set(sessionId, { id: strip.id, pc, source, track, latencyProfile })
       let bucket = webrtcSessionsByMusician.get(strip.id)
       if (!bucket) {
         bucket = new Set()
@@ -3554,7 +3568,12 @@ function createServices(app) {
   function tuneWebRtcAudioSdp(sdp, latencyProfile = 'pro') {
     const raw = String(sdp || '')
     if (!raw.trim()) return raw
-    const desiredPtime = latencyProfile === 'wifi24' || latencyProfile === 'mid200' ? 20 : 10
+    const desiredPtime =
+      latencyProfile === 'wifi24' || latencyProfile === 'mid200'
+        ? 20
+        : latencyProfile === 'provocal'
+          ? 10
+          : 10
     const lines = raw.replace(/\r\n/g, '\n').split('\n')
     const mediaIndex = lines.findIndex((line) => line.startsWith('m=audio '))
     if (mediaIndex === -1) return raw
@@ -3595,11 +3614,12 @@ function createServices(app) {
     params.set('sprop-stereo', '1')
     params.set('maxplaybackrate', String(MVP_SAMPLE_RATE_HZ))
     params.set('usedtx', '0')
-    params.set('useinbandfec', latencyProfile === 'pro' ? '0' : '1')
-    params.set('cbr', latencyProfile === 'pro' ? '1' : params.get('cbr') || '0')
-    params.set('x-google-min-bitrate', latencyProfile === 'pro' ? '128' : '96')
-    params.set('x-google-start-bitrate', latencyProfile === 'pro' ? '160' : '128')
-    params.set('x-google-max-bitrate', latencyProfile === 'pro' ? '192' : '160')
+    const aggressive = latencyProfile === 'pro' || latencyProfile === 'provocal'
+    params.set('useinbandfec', aggressive ? '0' : '1')
+    params.set('cbr', aggressive ? '1' : params.get('cbr') || '0')
+    params.set('x-google-min-bitrate', latencyProfile === 'provocal' ? '160' : aggressive ? '128' : '96')
+    params.set('x-google-start-bitrate', latencyProfile === 'provocal' ? '192' : aggressive ? '160' : '128')
+    params.set('x-google-max-bitrate', latencyProfile === 'provocal' ? '256' : aggressive ? '192' : '160')
     return `a=fmtp:${payload} ${Array.from(params.entries())
       .map(([k, v]) => `${k}=${v}`)
       .join(';')}`
@@ -3610,17 +3630,21 @@ function createServices(app) {
     else section.push(replacement)
   }
   function normalizeLatencyProfile(input) {
-    if (input === 'pro' || input === 'low' || input === 'wifi24') return input
+    if (input === 'provocal' || input === 'pro' || input === 'low' || input === 'wifi24') return input
     if (input === 'mid200') return input
     return 'stable'
   }
   function preferredWireCodecForProfile(profile) {
     if (profile === 'wifi24') return 'mulaw_u8'
+    if (profile === 'provocal') return 'pcm_s16'
     if (profile === 'pro') return 'pcm_s16'
     return 'pcm_s16'
   }
   function wireCodecForSocket(profile, bufferedAmount, pcmWireBytes) {
     if (profile === 'wifi24') return 'mulaw_u8'
+    if (profile === 'provocal') {
+      return bufferedAmount > pcmWireBytes * 0.1 ? 'mulaw_u8' : 'pcm_s16'
+    }
     if (profile === 'pro') {
       return bufferedAmount > pcmWireBytes * 0.2 ? 'mulaw_u8' : 'pcm_s16'
     }
@@ -3633,6 +3657,7 @@ function createServices(app) {
   function wsBufferedFactorForProfile(profile) {
     /* `pro`: palco 5 GHz, não tolera backlog. `wifi24`: menos fila TCP em 2,4 GHz (LAN interna pode usar UDP em vez disto).
      * `stable`: mais backpressure no Node se o socket enche. */
+    if (profile === 'provocal') return 0.2
     if (profile === 'pro') return 0.35
     if (profile === 'low') return 0.75
     if (profile === 'wifi24') return 0.5

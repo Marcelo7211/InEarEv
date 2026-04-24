@@ -1,15 +1,80 @@
 :root {
-  font-family: system-ui, sans-serif;
+  font-family:
+    Inter,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
   line-height: 1.5;
   color: #e8eaed;
-  background: #0f1115;
+  background:
+    radial-gradient(circle at top, rgba(88, 166, 255, 0.1), transparent 28%),
+    linear-gradient(180deg, #06090f 0%, #0c1118 100%);
+  color-scheme: dark;
+  font-synthesis-weight: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html {
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top, rgba(88, 166, 255, 0.1), transparent 28%),
+    linear-gradient(180deg, #06090f 0%, #0c1118 100%);
 }
 
 body {
   margin: 0;
   min-height: 100vh;
+  background: transparent;
 }
 
 * {
   box-sizing: border-box;
+}
+
+*::selection {
+  background: rgba(88, 166, 255, 0.32);
+  color: #f0f6fc;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+code {
+  font-family:
+    "SFMono-Regular",
+    Consolas,
+    "Liberation Mono",
+    Menlo,
+    monospace;
+}
+
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(11, 17, 25, 0.92);
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #30465f 0%, #213243 100%);
+  border: 2px solid rgba(11, 17, 25, 0.95);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #3b5a79 0%, #29425a 100%);
 }

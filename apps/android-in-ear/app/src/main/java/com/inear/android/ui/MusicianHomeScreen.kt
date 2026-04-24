@@ -31,6 +31,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -131,7 +132,12 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Retorno") },
+                title = { Text("Meu retorno") },
+                colors =
+                    TopAppBarDefaults.topAppBarColors(
+                        containerColor = Color(0xFF111925),
+                        titleContentColor = Color(0xFFeef4fb),
+                    ),
                 actions = {
                     Box(modifier = Modifier.padding(end = 8.dp)) {
                         DeskPillButton(label = "Sair", active = false, onClick = { vm.logout() })
@@ -147,7 +153,7 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                 Modifier.fillMaxWidth().padding(pad).padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text("Sem showfile ou perfil músico. Confirma login e servidor.")
+                Text("Não consegui carregar seu show ou seu perfil. Confira o login e o desktop.")
                 Button(onClick = { vm.refreshShowfile() }) { Text("Recarregar") }
             }
             return@Scaffold
@@ -157,6 +163,36 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
             modifier = Modifier.fillMaxSize().padding(pad).padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            Card(shape = RoundedCornerShape(14.dp)) {
+                Column(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(Color(0xFF162131), Color(0xFF0f1724)),
+                                ),
+                            )
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        "Palco pronto",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = Color(0xFFeef4fb),
+                    )
+                    Text(
+                        "${m.name} · ${sf.name}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = Color(0xFF8ab4ff),
+                    )
+                    Text(
+                        "Escolha o modo de atraso, ouça o retorno e ajuste sua mix abaixo.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF99abc1),
+                    )
+                }
+            }
             val estimatedLatencyMs = stats.estimatedLatencyMs
             val latencyUserLabel =
                 when {
@@ -176,14 +212,22 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                     "error" -> "Erro"
                     else -> "Parado"
                 }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 DeskPillButton(
-                    label = "Palco (~200 ms)",
+                    label = "Palco seguro",
                     active = lat == "mid200",
                     onClick = { vm.latencyProfile.value = "mid200" },
                 )
                 DeskPillButton(
-                    label = "Pro (~15 ms)",
+                    label = "Canto ao vivo",
+                    active = lat == "provocal",
+                    onClick = { vm.latencyProfile.value = "provocal" },
+                )
+                DeskPillButton(
+                    label = "Muito rápido",
                     active = lat == "pro",
                     onClick = { vm.latencyProfile.value = "pro" },
                 )
@@ -220,9 +264,9 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                     Spacer(Modifier.weight(1f))
                 }
                 if (!playing) {
-                    DeskPillButton(label = "Iniciar áudio", active = true, onClick = { vm.startRetorno(); playing = true })
+                    DeskPillButton(label = "Ouvir retorno", active = true, onClick = { vm.startRetorno(); playing = true })
                 } else {
-                    DeskPillButton(label = "Parar", active = false, onClick = { vm.stopRetorno(); playing = false })
+                    DeskPillButton(label = "Parar retorno", active = false, onClick = { vm.stopRetorno(); playing = false })
                 }
             }
             if (stats.lastError != null) {
@@ -237,7 +281,7 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                     verticalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
                     Text(
-                        "Status do retorno",
+                        "Como está seu retorno",
                         style = MaterialTheme.typography.titleSmall,
                         color = Color(0xFFe8eaed),
                     )
@@ -247,27 +291,27 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                         color = Color(0xFFdbe6f3),
                     )
                     Text(
-                        "Transporte: $transportUserLabel · fila app ${stats.queuedAudioMs} ms · fila audio ${stats.halQueuedMs} ms",
+                        "Conexão: $transportUserLabel · app ${stats.queuedAudioMs} ms · áudio ${stats.halQueuedMs} ms",
                         style = MaterialTheme.typography.labelSmall,
                         color = Color(0xFF9ab8d8),
                     )
                     Text(
                         if (inputLevels?.receiving == true) {
-                            "Sinal do desktop: recebendo audio"
+                            "Som vindo do desktop: chegando normalmente"
                         } else {
-                            "Sinal do desktop: sem audio recebido agora"
+                            "Som vindo do desktop: sem áudio neste instante"
                         },
                         style = MaterialTheme.typography.labelSmall,
                         color = if (inputLevels?.receiving == true) Color(0xFF81c995) else Color(0xFFf0883e),
                     )
                     Text(
                         buildString {
-                            append("Captura PC: ")
+                            append("Entrada do computador: ")
                             append(
                                 when {
                                     sessionInfo.pcAudioCaptureReceiving -> "ativa"
-                                    sessionInfo.pcAudioCaptureConfigured -> "configurada sem PCM"
-                                    else -> "nao configurada"
+                                    sessionInfo.pcAudioCaptureConfigured -> "preparada, mas ainda sem som"
+                                    else -> "não configurada"
                                 },
                             )
                             if (!sessionInfo.captureDeviceName.isNullOrBlank()) {
@@ -280,13 +324,13 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                     )
                     if (!audioDebug.captureLastError.isNullOrBlank()) {
                         Text(
-                            "Ultimo erro Windows: ${audioDebug.captureLastError}",
+                            "Último erro do Windows: ${audioDebug.captureLastError}",
                             style = MaterialTheme.typography.labelSmall,
                             color = Color(0xFFf85149),
                         )
                     }
                     Text(
-                        "Diag: ultimo PCM ${audioDebug.captureLastGoodMsAgo ?: -1} ms · UDP alvo ${audioDebug.udpTargetCount} · WS ${audioDebug.wsClientCount}",
+                        "Resumo técnico: último áudio ${audioDebug.captureLastGoodMsAgo ?: -1} ms · destinos UDP ${audioDebug.udpTargetCount} · conexões WS ${audioDebug.wsClientCount}",
                         style = MaterialTheme.typography.labelSmall,
                         color = Color(0xFF8b949e),
                     )
@@ -294,7 +338,7 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
             }
             MasterDeskControl(value = master, onSet = { master = it; vm.setMasterGain(it) })
 
-            Text("Mesa", style = MaterialTheme.typography.titleMedium)
+            Text("Sua mix", style = MaterialTheme.typography.titleMedium)
             val boardScroll = rememberScrollState()
             Row(
                 modifier = Modifier
@@ -312,7 +356,7 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                     val muted = m.sendMutes?.get(gid) == true
                     MixerStripCard(
                         title = g.name,
-                        subtitle = "Grupo · $gid",
+                        subtitle = "Grupo",
                         gain = send,
                         meterTitle = "Send",
                         vuLevel = groupVuLevel(sf, g.id, inputLevels?.levelsByIndex ?: emptyMap()),
@@ -332,7 +376,7 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                     MixerStripCard(
                         channel = ch,
                         title = ch.name,
-                        subtitle = "$cid · send",
+                        subtitle = "Canal",
                         gain = send,
                         meterTitle = "Send",
                         vuLevel = channelVuLevel(ch, inputLevels?.levelsByIndex ?: emptyMap()),

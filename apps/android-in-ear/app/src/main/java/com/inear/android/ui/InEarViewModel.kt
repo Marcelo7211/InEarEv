@@ -192,9 +192,9 @@ class InEarViewModel(application: Application) : AndroidViewModel(application) {
         if (s.token.isEmpty()) return
         val picked = latencyProfile.value
         val net = _showfile.value?.networkProfile.orEmpty()
-        /* Em 2,4 GHz o perfil "pro" é demasiado apertado para o jitter típico — usa wifi24. */
+        /* Em 2,4 GHz os perfis mais agressivos ficam instáveis — usa wifi24. */
         val effective =
-            if (net == "wifi_2_4" && picked == "pro") "wifi24" else picked
+            if (net == "wifi_2_4" && (picked == "pro" || picked == "provocal")) "wifi24" else picked
         audioEngine.start(s.apiBase, s.token, effective)
     }
 
