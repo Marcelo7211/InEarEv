@@ -71,6 +71,9 @@ private val MuteOffBg = Brush.verticalGradient(listOf(Color(0xFF141c28), Color(0
 private val MuteOnBg = Brush.verticalGradient(listOf(Color(0xFF2a1a1f), Color(0xFF141c28)))
 private val DeskBtnBg = Brush.verticalGradient(listOf(Color(0xFF223047), Color(0xFF141c28)))
 private val AccentBlue = Color(0xFF58a6ff)
+private val StripCardBg = Brush.verticalGradient(listOf(Color(0xFF1c2533), Color(0xFF101722)))
+private val StripHeaderBg = Brush.verticalGradient(listOf(Color(0xFF152131), Color(0xFF101924)))
+private val StripFaderBg = Brush.verticalGradient(listOf(Color(0xFF0f151d), Color(0xFF0b1016)))
 private val ClipLedOff = Color(0xFF3a4554)
 private val ClipLedOn = Color(0xFFf85149)
 private val VuGrad = Brush.verticalGradient(
@@ -390,29 +393,43 @@ private fun MixerStripCard(
     onEqChange: ((Float, Float, Float) -> Unit)? = null,
     eqLocked: Boolean = false,
 ) {
+    val accent = channelAccentColor(channel?.id ?: title, channel?.color, channel?.captureInputIndex)
+    val badge = channelIconGlyph(channel?.icon)
     Card(
-        modifier = Modifier.width(158.dp).fillMaxHeight(),
-        shape = RoundedCornerShape(8.dp),
+        modifier = Modifier.width(170.dp).fillMaxHeight(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF111925)),
     ) {
         Column(
-            modifier = Modifier.fillMaxSize().background(CardBg).padding(horizontal = 5.dp, vertical = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .background(StripCardBg)
+                    .padding(horizontal = 7.dp, vertical = 7.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                val accent = channelAccentColor(channel?.id ?: title, channel?.color, channel?.captureInputIndex)
-                val badge = channelIconGlyph(channel?.icon)
+            Row(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, accent.copy(alpha = 0.22f), RoundedCornerShape(12.dp))
+                        .background(StripHeaderBg, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 8.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 Box(
                     modifier = Modifier
-                        .size(22.dp)
-                        .background(accent, RoundedCornerShape(6.dp))
-                        .border(1.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(6.dp)),
+                        .size(28.dp)
+                        .background(accent, RoundedCornerShape(8.dp))
+                        .border(1.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(8.dp)),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
                         text = badge,
                         color = Color(0xFF07111a),
                         fontWeight = FontWeight.Black,
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelMedium,
                     )
                     if (muted) {
                         Box(
@@ -424,19 +441,28 @@ private fun MixerStripCard(
                         )
                     }
                 }
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         title,
                         fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.labelMedium,
                         color = Color(0xFFe8eaed),
                     )
-                    Text(
-                        subtitle,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF9aa0a6),
-                        fontSize = MaterialTheme.typography.labelSmall.fontSize * 0.85f,
-                    )
+                    Box(
+                        modifier =
+                            Modifier
+                                .padding(top = 3.dp)
+                                .border(1.dp, Color(0xFF34485f), RoundedCornerShape(999.dp))
+                                .background(Color(0xFF101923), RoundedCornerShape(999.dp))
+                                .padding(horizontal = 7.dp, vertical = 2.dp),
+                    ) {
+                        Text(
+                            subtitle,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFF9ab8d8),
+                            fontSize = MaterialTheme.typography.labelSmall.fontSize * 0.88f,
+                        )
+                    }
                 }
             }
             Box(
@@ -448,7 +474,7 @@ private fun MixerStripCard(
                         shape = RoundedCornerShape(999.dp),
                     )
                     .background(if (muted) MuteOnBg else MuteOffBg, RoundedCornerShape(999.dp))
-                    .padding(horizontal = 6.dp, vertical = 3.dp)
+                    .padding(horizontal = 8.dp, vertical = 5.dp)
                     .clickable { onToggleMute() },
             ) {
                 Row(
@@ -458,7 +484,7 @@ private fun MixerStripCard(
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                         Text(
-                            "MUTE",
+                            "Silenciar",
                             color = if (muted) Color(0xFFffb4b0) else Color(0xFFdbe6f3),
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.Bold,
@@ -466,7 +492,7 @@ private fun MixerStripCard(
                     }
                     Box(
                         modifier = Modifier
-                            .size(24.dp)
+                            .size(28.dp)
                             .clip(CircleShape)
                             .border(
                                 1.dp,
@@ -492,7 +518,7 @@ private fun MixerStripCard(
                 }
             }
             Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.fillMaxWidth().weight(1f),
             ) {
                 DesktopLikeVolumeStrip(
@@ -510,11 +536,16 @@ private fun MixerStripCard(
                         mid = eq.second,
                         high = eq.third,
                         onChange = onEqChange,
-                        modifier = Modifier.width(46.dp).fillMaxHeight(),
+                        modifier = Modifier.width(52.dp).fillMaxHeight(),
                     )
                 } else if (eqLocked) {
                     Box(
-                        modifier = Modifier.width(46.dp).fillMaxHeight().border(1.dp, Color(0xFF3c5068), RoundedCornerShape(6.dp)),
+                        modifier =
+                            Modifier
+                                .width(52.dp)
+                                .fillMaxHeight()
+                                .border(1.dp, Color(0xFF3c5068), RoundedCornerShape(10.dp))
+                                .background(Color(0xFF101923), RoundedCornerShape(10.dp)),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text("EQ\nLOCK", style = MaterialTheme.typography.labelSmall, color = Color(0xFF8b949e))
@@ -625,8 +656,9 @@ private fun EqSlider(label: String, value: Float, modifier: Modifier = Modifier,
         modifier = Modifier
             .then(modifier)
             .fillMaxWidth()
-            .border(1.dp, Color(0xFF3c5068), RoundedCornerShape(7.dp))
-            .padding(horizontal = 3.dp, vertical = 3.dp),
+            .border(1.dp, Color(0xFF3c5068), RoundedCornerShape(10.dp))
+            .background(Color(0xFF101923), RoundedCornerShape(10.dp))
+            .padding(horizontal = 4.dp, vertical = 5.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(label, style = MaterialTheme.typography.labelSmall)
@@ -683,9 +715,9 @@ private fun DesktopLikeVolumeStrip(
 
     Column(
         modifier = modifier
-            .border(1.dp, Color(0xFF3f4f66), RoundedCornerShape(6.dp))
-            .background(Color(0xFF303030), RoundedCornerShape(6.dp))
-            .padding(horizontal = 3.dp, vertical = 5.dp),
+            .border(1.dp, Color(0xFF3f4f66), RoundedCornerShape(10.dp))
+            .background(StripFaderBg, RoundedCornerShape(10.dp))
+            .padding(horizontal = 5.dp, vertical = 7.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Row(
@@ -712,8 +744,8 @@ private fun DesktopLikeVolumeStrip(
             modifier = Modifier
                 .padding(top = 2.dp)
                 .border(1.dp, Color(0xFF2f3f55), RoundedCornerShape(3.dp))
-                .background(Color(0xFF202020), RoundedCornerShape(3.dp))
-                .padding(horizontal = 4.dp, vertical = 1.dp),
+                    .background(Color(0xFF16212e), RoundedCornerShape(3.dp))
+                    .padding(horizontal = 5.dp, vertical = 2.dp),
         ) {
             Text("${linearToDb(local)} dB", style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace, color = Color(0xFF2af02a))
         }
@@ -754,7 +786,7 @@ private fun DesktopLikeVolumeStrip(
             }
             Box(
                 modifier = Modifier
-                    .width(30.dp)
+                    .width(34.dp)
                     .fillMaxHeight()
                     .onSizeChanged { trackHeightPx = it.height.toFloat().coerceAtLeast(1f) }
                     .pointerInput(rangeMin, rangeMax, trackHeightPx) {
@@ -791,14 +823,14 @@ private fun DesktopLikeVolumeStrip(
                 Box(
                     modifier = Modifier
                         .offset(y = with(density) { thumbOffsetPx.toDp() })
-                        .size(width = 21.dp, height = 29.dp)
+                        .size(width = 24.dp, height = 32.dp)
                         .background(
                             brush = Brush.verticalGradient(
-                                listOf(Color(0xFFfbfcff), Color(0xFF9ab6d6), Color(0xFF4b627f)),
+                                listOf(Color(0xFFfbfcff), Color(0xFFc3d8ef), Color(0xFF587392)),
                             ),
-                            shape = RoundedCornerShape(5.dp),
+                            shape = RoundedCornerShape(7.dp),
                         )
-                        .border(1.dp, Color(0xFF8da7c7), RoundedCornerShape(5.dp)),
+                        .border(1.dp, Color(0xFF8da7c7), RoundedCornerShape(7.dp)),
                 )
             }
         }

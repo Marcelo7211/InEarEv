@@ -154,7 +154,8 @@ class RetornoAudioEngine(
         setLocalDescriptionBlocking(pc, offer)
         iceGatheringDone.await(1200, TimeUnit.MILLISECONDS)
         val localSdp = pc.localDescription?.description ?: offer.description
-        val answer = repository.createWebRtcAnswer(apiBase, token, localSdp, retornoLatencyProfile)
+        val tunedLocalSdp = tuneAudioSdpForLatency(localSdp, retornoLatencyProfile)
+        val answer = repository.createWebRtcAnswer(apiBase, token, tunedLocalSdp, retornoLatencyProfile)
         if (!running) return
         if (answer.sdp.isBlank()) {
             error("Servidor WebRTC respondeu SDP vazia")
@@ -323,8 +324,8 @@ class RetornoAudioEngine(
 
     private fun targetLatencyMs(latency: String): Int =
         when (latency) {
-            "provocal" -> 10
-            "pro" -> 15
+            "provocal" -> 18
+            "pro" -> 24
             "low" -> 80
             "wifi24" -> 180
             "mid200" -> 200
@@ -422,8 +423,8 @@ class RetornoAudioEngine(
 
     private fun maxJitterPacketsForLatency(latency: String): Int =
         when (latency) {
-            "provocal" -> 1
-            "pro" -> 2
+            "provocal" -> 3
+            "pro" -> 4
             "low" -> 6
             "wifi24" -> 12
             "mid200" -> 14
@@ -491,16 +492,37 @@ class RetornoAudioEngine(
         params["minptime"] = desiredPtime.toString()
         params["ptime"] = desiredPtime.toString()
         params["maxptime"] = desiredPtime.toString()
-        params["stereo"] = "1"
-        params["sprop-stereo"] = "1"
-        params["maxplaybackrate"] = SAMPLE_RATE.toString()
         val aggressive = latency == "pro" || latency == "provocal"
-        params["useinbandfec"] = if (aggressive) "0" else "1"
+        params["stereo"] = if (aggressive) "0" else "1"
+        params["sprop-stereo"] = if (aggressive) "0" else "1"
+        params["maxplaybackrate"] = SAMPLE_RATE.toString()
+        params["useinbandfec"] = "1"
         params["usedtx"] = "0"
-        params["cbr"] = if (aggressive) "1" else params["cbr"] ?: "0"
-        params["x-google-min-bitrate"] = if (latency == "provocal") "160" else if (latency == "pro") "128" else "96"
-        params["x-google-start-bitrate"] = if (latency == "provocal") "192" else if (latency == "pro") "160" else "128"
-        params["x-google-max-bitrate"] = if (latency == "provocal") "256" else if (latency == "pro") "192" else "160"
+        params["cbr"] = if (aggressive) "0" else params["cbr"] ?: "0"
+        params["maxaveragebitrate"] =
+            when (latency) {
+                "provocal" -> "64000"
+                "pro" -> "96000"
+                else -> params["maxaveragebitrate"] ?: "128000"
+            }
+        params["x-google-min-bitrate"] =
+            when (latency) {
+                "provocal" -> "48"
+                "pro" -> "64"
+                else -> "96"
+            }
+        params["x-google-start-bitrate"] =
+            when (latency) {
+                "provocal" -> "64"
+                "pro" -> "80"
+                else -> "128"
+            }
+        params["x-google-max-bitrate"] =
+            when (latency) {
+                "provocal" -> "96"
+                "pro" -> "128"
+                else -> "160"
+            }
         return "a=fmtp:$opusPayload " + params.entries.joinToString(";") { "${it.key}=${it.value}" }
     }
 
