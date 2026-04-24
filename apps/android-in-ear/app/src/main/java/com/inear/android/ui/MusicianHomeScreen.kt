@@ -137,8 +137,18 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
 
     Scaffold(
         topBar = {
+            val headerName =
+                showfile
+                    ?.let { vm.selfMusician() }
+                    ?.let { musician ->
+                        musician.name
+                            .trim()
+                            .takeUnless { it.isBlank() || it.contains("default", ignoreCase = true) }
+                            ?: musician.username.trim().ifBlank { "músico" }
+                    }
+                    ?: "músico"
             TopAppBar(
-                title = { Text("Meu retorno") },
+                title = { Text("Olá, $headerName") },
                 colors =
                     TopAppBarDefaults.topAppBarColors(
                         containerColor = Color(0xFF111925),
@@ -169,6 +179,10 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
             modifier = Modifier.fillMaxSize().padding(pad).padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            val musicianDisplayName =
+                m.name
+                    .trim()
+                    .takeUnless { it.isBlank() || it.contains("default", ignoreCase = true) }
             Card(shape = RoundedCornerShape(14.dp)) {
                 Column(
                     modifier =
@@ -199,14 +213,9 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                         )
                     }
                     Text(
-                        "${m.name} · ${sf.name}",
+                        musicianDisplayName?.let { "$it · ${sf.name}" } ?: sf.name,
                         style = MaterialTheme.typography.labelMedium,
                         color = Color(0xFF8ab4ff),
-                    )
-                    Text(
-                        "Escolha o modo de atraso, ouça o retorno e ajuste sua mix abaixo.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF99abc1),
                     )
                 }
             }
