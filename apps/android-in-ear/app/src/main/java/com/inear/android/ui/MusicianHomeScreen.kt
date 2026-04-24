@@ -37,7 +37,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -59,7 +58,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.inear.android.net.ChannelStrip
+import com.inear.android.net.GroupBus
 import com.inear.android.net.MusicianStrip
 import com.inear.android.net.Showfile
 import kotlin.math.max
@@ -95,13 +96,12 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.screenWidthDp > configuration.screenHeightDp
     val boardHeight = if (isLandscape) configuration.screenHeightDp.dp else 420.dp
-    val showfile by vm.showfile.collectAsState()
-    val stats by vm.audioEngine.stats.collectAsState()
-    val net by vm.network.collectAsState()
-    val inputLevels by vm.audioInputLevels.collectAsState()
-    val sessionInfo by vm.sessionInfo.collectAsState()
-    val audioDebug by vm.audioDebug.collectAsState()
-    val lat by vm.latencyProfile.collectAsState()
+    val showfile by vm.showfile.collectAsStateWithLifecycle()
+    val stats by vm.audioEngine.stats.collectAsStateWithLifecycle()
+    val inputLevels by vm.audioInputLevels.collectAsStateWithLifecycle()
+    val sessionInfo by vm.sessionInfo.collectAsStateWithLifecycle()
+    val audioDebug by vm.audioDebug.collectAsStateWithLifecycle()
+    val lat by vm.latencyProfile.collectAsStateWithLifecycle()
     var master by remember { mutableFloatStateOf(1f) }
     var playing by remember { mutableStateOf(false) }
     var previousLatencyKey by remember { mutableStateOf<String?>(null) }
@@ -110,14 +110,14 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
     LaunchedEffect(playing) {
         while (true) {
             vm.refreshShowfile()
-            delay(if (playing) 280 else 1100)
+            delay(if (playing) 1500 else 4500)
         }
     }
 
     LaunchedEffect(playing) {
         while (true) {
             vm.refreshAudioInputLevels()
-            delay(if (playing) 120 else 850)
+            delay(if (playing) 250 else 1200)
         }
     }
 
@@ -193,6 +193,10 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
             return@Scaffold
         }
 
+        val levelsByIndex = inputLevels?.levelsByIndex ?: emptyMap()
+        val channelById = remember(sf.channels) { sf.channels.associateBy { it.id } }
+        val groupById = remember(sf.groups) { sf.groups.associateBy { it.id } }
+        val channelOrder = remember(sf, m) { vm.channelOrderForSelf() }
         val pageScroll = rememberScrollState()
         Column(
             modifier = Modifier.fillMaxSize().verticalScroll(pageScroll).padding(pad).padding(10.dp),
@@ -356,7 +360,7 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 for (gid in m.scope.groupIds) {
-                    val g = sf.groups.find { it.id == gid } ?: continue
+                    val g = groupById[gid] ?: continue
                     val send = (m.sendGains[gid] ?: 1.0).toFloat()
                     val muted = m.sendMutes?.get(gid) == true
                     MixerStripCard(
@@ -364,14 +368,14 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                         subtitle = "Grupo",
                         gain = send,
                         meterTitle = "Sinal",
-                        vuLevel = groupVuLevel(sf, g.id, inputLevels?.levelsByIndex ?: emptyMap()),
+                        vuLevel = groupVuLevel(g, channelById, levelsByIndex),
                         muted = muted,
                         onToggleMute = { vm.patchSendMute(m.id, gid, !muted) },
                         onGainCommit = { vm.patchSendGain(m.id, gid, it) },
                     )
                 }
-                for (cid in vm.channelOrderForSelf()) {
-                    val ch = sf.channels.find { it.id == cid } ?: continue
+                for (cid in channelOrder) {
+                    val ch = channelById[cid] ?: continue
                     val send = (m.sendGains[cid] ?: 1.0).toFloat()
                     val muted = m.sendMutes?.get(cid) == true
                     val ear = m.eqByChannel?.get(cid)
@@ -384,7 +388,7 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                         subtitle = "Canal",
                         gain = send,
                         meterTitle = "Sinal",
-                        vuLevel = channelVuLevel(ch, inputLevels?.levelsByIndex ?: emptyMap()),
+                        vuLevel = channelVuLevel(ch, levelsByIndex),
                         muted = muted,
                         onToggleMute = { vm.patchSendMute(m.id, cid, !muted) },
                         onGainCommit = { vm.patchSendGain(m.id, cid, it) },
@@ -975,11 +979,15 @@ private fun channelVuLevel(ch: ChannelStrip, levelsByIndex: Map<String, Double>)
     return (levelsByIndex[idx.toString()] ?: 0.0).toFloat().coerceIn(0f, 1f)
 }
 
-private fun groupVuLevel(sf: Showfile, groupId: String, levelsByIndex: Map<String, Double>): Float {
-    val g = sf.groups.find { it.id == groupId } ?: return 0f
+private fun groupVuLevel(
+    group: GroupBus?,
+    channelById: Map<String, ChannelStrip>,
+    levelsByIndex: Map<String, Double>,
+): Float {
+    if (group == null) return 0f
     var peak = 0f
-    for (cid in g.channelIds) {
-        val ch = sf.channels.find { it.id == cid } ?: continue
+    for (cid in group.channelIds) {
+        val ch = channelById[cid] ?: continue
         val lv = channelVuLevel(ch, levelsByIndex)
         if (lv > peak) peak = lv
     }

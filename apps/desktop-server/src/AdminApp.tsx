@@ -139,6 +139,7 @@ export function AdminApp() {
   /** Reconciliacao bidirecional: se o musico editar no app, o Admin reflete em poucos segundos. */
   useEffect(() => {
     if (!token || role !== 'admin') return
+    const fastSyncTabs = tab === 'channels' || tab === 'musicians'
     let stopped = false
     const tick = async () => {
       if (stopped) return
@@ -150,12 +151,12 @@ export function AdminApp() {
     }
     const t = setInterval(() => {
       void tick()
-    }, 1500)
+    }, fastSyncTabs ? 1500 : 4000)
     return () => {
       stopped = true
       clearInterval(t)
     }
-  }, [token, role, refreshShowfile])
+  }, [token, role, tab, refreshShowfile])
 
   useEffect(() => {
     if (!token) return
@@ -196,6 +197,14 @@ export function AdminApp() {
 
   useEffect(() => {
     if (!token) return
+    const shouldPollLevels =
+      role === 'musician' ||
+      tab === 'channels' ||
+      tab === 'musicians'
+    if (!shouldPollLevels) {
+      setAudioInputLevels(null)
+      return
+    }
     let cancelled = false
     const load = async () => {
       try {
@@ -206,12 +215,12 @@ export function AdminApp() {
       }
     }
     void load()
-    const t = setInterval(load, 150)
+    const t = setInterval(load, role === 'musician' ? 220 : 300)
     return () => {
       cancelled = true
       clearInterval(t)
     }
-  }, [token])
+  }, [token, role, tab])
 
   useEffect(() => {
     let cancelled = false
