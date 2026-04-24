@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -61,6 +62,7 @@ import com.inear.android.net.MusicianStrip
 import com.inear.android.net.Showfile
 import kotlin.math.max
 import kotlin.math.ln
+import kotlin.math.sqrt
 import kotlinx.coroutines.delay
 
 private val PanelBg = Color(0xFF10141c)
@@ -141,14 +143,25 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                 showfile
                     ?.let { vm.selfMusician() }
                     ?.let { musician ->
-                        musician.name
-                            .trim()
-                            .takeUnless { it.isBlank() || it.contains("default", ignoreCase = true) }
-                            ?: musician.username.trim().ifBlank { "músico" }
+                        val displayName =
+                            musician.name
+                                .trim()
+                                .takeUnless { it.isBlank() || it.contains("default", ignoreCase = true) }
+                        val displayUsername =
+                            musician.username
+                                .trim()
+                                .takeUnless { it.isBlank() || it.contains("default", ignoreCase = true) }
+                        displayName ?: displayUsername ?: "músico"
                     }
                     ?: "músico"
             TopAppBar(
-                title = { Text("Olá, $headerName") },
+                title = {
+                    Text(
+                        "Olá, $headerName",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                },
+                modifier = Modifier.height(52.dp),
                 colors =
                     TopAppBarDefaults.topAppBarColors(
                         containerColor = Color(0xFF111925),
@@ -206,17 +219,49 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                             style = MaterialTheme.typography.titleSmall,
                             color = Color(0xFFeef4fb),
                         )
-                        DeskPillButton(
-                            label = "Status",
-                            active = showRetornoStatus,
-                            onClick = { showRetornoStatus = true },
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (!playing) {
+                                DeskPillButton(
+                                    label = "Iniciar",
+                                    active = true,
+                                    onClick = {
+                                        vm.startRetorno()
+                                        playing = true
+                                    },
+                                )
+                            } else {
+                                DeskPillButton(
+                                    label = "Parar",
+                                    active = false,
+                                    onClick = {
+                                        vm.stopRetorno()
+                                        playing = false
+                                    },
+                                )
+                            }
+                            DeskPillButton(
+                                label = "Status",
+                                active = showRetornoStatus,
+                                onClick = { showRetornoStatus = true },
+                            )
+                        }
+                    }
+                    if (musicianDisplayName != null) {
+                        Text(
+                            "${musicianDisplayName} · ${sf.name}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color(0xFF8ab4ff),
+                        )
+                    } else {
+                        Text(
+                            sf.name,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = Color(0xFF8ab4ff),
                         )
                     }
-                    Text(
-                        musicianDisplayName?.let { "$it · ${sf.name}" } ?: sf.name,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Color(0xFF8ab4ff),
-                    )
                 }
             }
             val estimatedLatencyMs = stats.estimatedLatencyMs
@@ -274,27 +319,6 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                     vm.startRetorno()
                 }
             }
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (net?.self?.hint?.isNotBlank() == true) {
-                    Text(
-                        net?.self?.hint ?: "",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF9aa0a6),
-                        modifier = Modifier.weight(1f).padding(end = 8.dp),
-                    )
-                } else {
-                    Spacer(Modifier.weight(1f))
-                }
-                if (!playing) {
-                    DeskPillButton(label = "Ouvir retorno", active = true, onClick = { vm.startRetorno(); playing = true })
-                } else {
-                    DeskPillButton(label = "Parar retorno", active = false, onClick = { vm.stopRetorno(); playing = false })
-                }
-            }
             if (stats.lastError != null) {
                 Text("Erro: ${stats.lastError}", color = MaterialTheme.colorScheme.error)
             }
@@ -331,8 +355,6 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                 )
             }
             MasterDeskControl(value = master, onSet = { master = it; vm.setMasterGain(it) })
-
-            Text("Sua mix", style = MaterialTheme.typography.titleMedium)
             val boardScroll = rememberScrollState()
             Row(
                 modifier = Modifier
@@ -352,7 +374,7 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                         title = g.name,
                         subtitle = "Grupo",
                         gain = send,
-                        meterTitle = "Send",
+                        meterTitle = "Sinal",
                         vuLevel = groupVuLevel(sf, g.id, inputLevels?.levelsByIndex ?: emptyMap()),
                         muted = muted,
                         onToggleMute = { vm.patchSendMute(m.id, gid, !muted) },
@@ -372,7 +394,7 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                         title = ch.name,
                         subtitle = "Canal",
                         gain = send,
-                        meterTitle = "Send",
+                        meterTitle = "Sinal",
                         vuLevel = channelVuLevel(ch, inputLevels?.levelsByIndex ?: emptyMap()),
                         muted = muted,
                         onToggleMute = { vm.patchSendMute(m.id, cid, !muted) },
@@ -403,9 +425,18 @@ private fun MixerStripCard(
     eqLocked: Boolean = false,
 ) {
     val accent = channelAccentColor(channel?.id ?: title, channel?.color, channel?.captureInputIndex)
-    val badge = channelIconGlyph(channel?.icon)
+    val displayTitle =
+        channel?.name
+            ?.trim()
+            ?.takeUnless { it.isBlank() }
+            ?: title
+    val displaySubtitle =
+        channel?.captureInputIndex
+            ?.takeIf { it >= 0 }
+            ?.let { "In ${it + 1}" }
+            ?: subtitle
     Card(
-        modifier = Modifier.width(170.dp).fillMaxHeight(),
+        modifier = Modifier.width(174.dp).fillMaxHeight(),
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xFF111925)),
     ) {
@@ -414,8 +445,8 @@ private fun MixerStripCard(
                 Modifier
                     .fillMaxSize()
                     .background(StripCardBg)
-                    .padding(horizontal = 7.dp, vertical = 7.dp),
-            verticalArrangement = Arrangement.spacedBy(7.dp),
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(
                 modifier =
@@ -423,53 +454,60 @@ private fun MixerStripCard(
                         .fillMaxWidth()
                         .border(1.dp, accent.copy(alpha = 0.22f), RoundedCornerShape(12.dp))
                         .background(StripHeaderBg, RoundedCornerShape(12.dp))
-                        .padding(horizontal = 8.dp, vertical = 7.dp),
+                        .padding(horizontal = 9.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Box(
                     modifier = Modifier
-                        .size(28.dp)
-                        .background(accent, RoundedCornerShape(8.dp))
-                        .border(1.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(8.dp)),
-                    contentAlignment = Alignment.Center,
+                        .width(5.dp)
+                        .height(38.dp)
+                        .background(accent, RoundedCornerShape(999.dp)),
+                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     Text(
-                        text = badge,
-                        color = Color(0xFF07111a),
-                        fontWeight = FontWeight.Black,
-                        style = MaterialTheme.typography.labelMedium,
-                    )
-                    if (muted) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxHeight()
-                                .width(2.dp)
-                                .background(Color(0xFFf85149))
-                                .rotate(-35f),
-                        )
-                    }
-                }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        title,
+                        displayTitle,
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.labelMedium,
                         color = Color(0xFFe8eaed),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
-                    Box(
-                        modifier =
-                            Modifier
-                                .padding(top = 3.dp)
-                                .border(1.dp, Color(0xFF34485f), RoundedCornerShape(999.dp))
-                                .background(Color(0xFF101923), RoundedCornerShape(999.dp))
-                                .padding(horizontal = 7.dp, vertical = 2.dp),
-                    ) {
-                        Text(
-                            subtitle,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFF9ab8d8),
-                            fontSize = MaterialTheme.typography.labelSmall.fontSize * 0.88f,
+                    Text(
+                        displaySubtitle,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF9ab8d8),
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Box(
+                    modifier =
+                        Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .border(1.dp, if (muted) Color(0xFFf85149) else Color(0xFF44586f), CircleShape)
+                            .background(if (muted) Color(0xFF2b1a22) else Color(0xFF14202e), CircleShape)
+                            .clickable { onToggleMute() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = if (muted) "🔇" else "🔊",
+                        color = if (muted) Color(0xFFf2f6ff) else Color(0xFFbdd6f7),
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                    if (muted) {
+                        Box(
+                            modifier =
+                                Modifier
+                                    .width(18.dp)
+                                    .height(2.dp)
+                                    .background(Color(0xFFf85149), RoundedCornerShape(999.dp))
+                                    .rotate(-38f),
                         )
                     }
                 }
@@ -483,7 +521,7 @@ private fun MixerStripCard(
                         shape = RoundedCornerShape(999.dp),
                     )
                     .background(if (muted) MuteOnBg else MuteOffBg, RoundedCornerShape(999.dp))
-                    .padding(horizontal = 8.dp, vertical = 5.dp)
+                    .padding(horizontal = 10.dp, vertical = 7.dp)
                     .clickable { onToggleMute() },
             ) {
                 Row(
@@ -517,12 +555,22 @@ private fun MixerStripCard(
                             color = if (muted) Color(0xFFf2f6ff) else Color(0xFFbdd6f7),
                             style = MaterialTheme.typography.labelSmall,
                         )
-                        Box(
-                            modifier = Modifier
-                                .size(7.dp)
-                                .background(if (muted) Color(0xFFf85149) else Color(0xFF2ea043), CircleShape)
-                                .align(Alignment.BottomEnd),
-                        )
+                        if (muted) {
+                            Box(
+                                modifier = Modifier
+                                    .width(18.dp)
+                                    .height(2.dp)
+                                    .background(Color(0xFFf85149), RoundedCornerShape(999.dp))
+                                    .rotate(-38f),
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .background(Color(0xFF2ea043), CircleShape)
+                                    .align(Alignment.BottomEnd),
+                            )
+                        }
                     }
                 }
             }
@@ -719,7 +767,8 @@ private fun DesktopLikeVolumeStrip(
         }
     }
     val clipOn = System.currentTimeMillis() < clipHoldUntilMs
-    val meterFill = vuLevel.coerceIn(0f, 1f)
+    val meterFill = vuVisualLevel(vuLevel)
+    val meterDbLabel = vuVisualDbLabel(vuLevel)
     val faderFill = ((local - rangeMin) / (rangeMax - rangeMin)).coerceIn(0f, 1f)
 
     Column(
@@ -734,12 +783,25 @@ private fun DesktopLikeVolumeStrip(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                meterTitle,
-                style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFFdbe6f3),
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Text(
+                    meterTitle,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFFdbe6f3),
+                )
+                Text(
+                    "$meterDbLabel dB",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = when {
+                        meterFill >= 0.88f -> Color(0xFFffb4b0)
+                        meterFill >= 0.55f -> Color(0xFFf4d03f)
+                        meterFill > 0f -> Color(0xFF81c995)
+                        else -> Color(0xFF8b949e)
+                    },
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("CLIP", style = MaterialTheme.typography.labelSmall, color = Color(0xFF8b949e))
                 Box(
@@ -783,7 +845,7 @@ private fun DesktopLikeVolumeStrip(
                 verticalArrangement = Arrangement.SpaceBetween,
                 horizontalAlignment = Alignment.End,
             ) {
-                listOf("0", "-6", "-12", "-24", "-80").forEach {
+                listOf("0", "-6", "-12", "-24", "-48").forEach {
                     Text(
                         it,
                         style = MaterialTheme.typography.labelSmall,
@@ -905,6 +967,18 @@ private fun linearToDb(v: Float): String {
     return (20.0 * ln(clamped.toDouble()) / ln(10.0)).toFloat().let { String.format("%.1f", it) }
 }
 
+private fun vuVisualLevel(v: Float): Float {
+    val clamped = v.coerceIn(0f, 1f)
+    if (clamped <= 0.001f) return 0f
+    return max(clamped, sqrt(clamped) * 0.9f).coerceIn(0f, 1f)
+}
+
+private fun vuVisualDbLabel(v: Float): String {
+    val meter = vuVisualLevel(v)
+    val db = -48f + (48f * meter)
+    return String.format("%.0f", db)
+}
+
 private fun channelVuLevel(ch: ChannelStrip, levelsByIndex: Map<String, Double>): Float {
     val idx = ch.captureInputIndex ?: return 0f
     return (levelsByIndex[idx.toString()] ?: 0.0).toFloat().coerceIn(0f, 1f)
@@ -931,28 +1005,6 @@ private val DefaultChannelColors = listOf(
     Color(0xFFdb61a2),
     Color(0xFFf0883e),
 )
-
-private fun channelIconGlyph(icon: String?): String {
-    return when (icon) {
-        "kick" -> "🥁"
-        "snare" -> "🥁"
-        "tom1" -> "🥁"
-        "tom2" -> "🥁"
-        "floor" -> "🥁"
-        "hihat" -> "🥁"
-        "crash" -> "🥁"
-        "ride" -> "🥁"
-        "overhead" -> "🎙"
-        "bass" -> "🎸"
-        "guitar" -> "🎸"
-        "keys" -> "🎹"
-        "vocal" -> "🎤"
-        "click" -> "⏱"
-        "track" -> "🎵"
-        "mic" -> "🎙"
-        else -> "🎚"
-    }
-}
 
 private fun channelAccentColor(id: String, color: String?, captureInputIndex: Int?): Color {
     val explicit = normalizeHex(color)

@@ -2132,6 +2132,7 @@ function createServices(app) {
     const frames = Math.max(1, Math.floor(capBlock.length / nCh))
     const prev = captureMeterState.levelsByIndex || {}
     const next = {}
+    const meterFloor = 0.02
     for (let c = 0; c < nCh; c++) {
       let sumSq = 0
       let peak = 0
@@ -2142,14 +2143,20 @@ function createServices(app) {
         if (a > peak) peak = a
       }
       const rms = Math.sqrt(sumSq / frames)
-      const shaped = clamp01(Math.max(rms * 1.8, peak * 0.92))
+      const dbPeak = peak > 0 ? 20 * Math.log10(peak) : -90
+      const dbRms = rms > 0 ? 20 * Math.log10(rms) : -90
+      const normalizedPeak = clamp01((dbPeak + 48) / 48)
+      const normalizedRms = clamp01((dbRms + 42) / 42)
+      const shaped = clamp01(Math.max(normalizedPeak, normalizedRms * 0.92, peak * 1.25, rms * 2.7))
       const prevLevel = clamp01(prev[String(c)] ?? 0)
-      const attack = 0.6
-      const release = 0.18
+      const attack = 0.82
+      const release = 0.24
       next[String(c)] =
-        shaped >= prevLevel
-          ? prevLevel + (shaped - prevLevel) * attack
-          : prevLevel + (shaped - prevLevel) * release
+        clamp01(
+          shaped >= prevLevel
+            ? Math.max(meterFloor, prevLevel + (shaped - prevLevel) * attack)
+            : prevLevel + (shaped - prevLevel) * release,
+        )
     }
     captureMeterState = { levelsByIndex: next, updatedAt: Date.now() }
   }
@@ -2158,7 +2165,8 @@ function createServices(app) {
     const prev = captureMeterState.levelsByIndex || {}
     const next = {}
     for (let c = 0; c < Math.max(1, nCh); c++) {
-      next[String(c)] = clamp01((prev[String(c)] ?? 0) * 0.82)
+      const current = prev[String(c)] ?? 0
+      next[String(c)] = current <= 0.02 ? 0 : clamp01(current * 0.9 - 0.008)
     }
     captureMeterState = { levelsByIndex: next, updatedAt: Date.now() }
   }

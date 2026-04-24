@@ -32,9 +32,9 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 fun LoginScreen(vm: InEarViewModel) {
-    var api by remember { mutableStateOf("http://192.168.0.10:3847") }
-    var user by remember { mutableStateOf("musician1") }
-    var pass by remember { mutableStateOf("musician1") }
+    var host by remember { mutableStateOf("") }
+    var user by remember { mutableStateOf("") }
+    var pass by remember { mutableStateOf("") }
     val err by vm.error.collectAsState()
 
     Box(
@@ -88,10 +88,10 @@ fun LoginScreen(vm: InEarViewModel) {
                             fontWeight = FontWeight.Bold,
                         )
                         OutlinedTextField(
-                            value = api,
-                            onValueChange = { api = it },
-                            label = { Text("Endereço do desktop") },
-                            supportingText = { Text("Exemplo: http://IP:3847") },
+                            value = host,
+                            onValueChange = { host = it },
+                            label = { Text("IP do desktop") },
+                            supportingText = { Text("Digite só o IP. O app usa `http` e porta `3847` automaticamente.") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
@@ -119,7 +119,7 @@ fun LoginScreen(vm: InEarViewModel) {
                 Button(
                     onClick = {
                         vm.clearError()
-                        vm.login(api, user, pass)
+                        vm.login(buildApiBase(host), user.trim(), pass)
                     },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
@@ -127,11 +127,20 @@ fun LoginScreen(vm: InEarViewModel) {
                 }
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    "Dica: use o mesmo IP mostrado no desktop.",
+                    "Dica: use o mesmo IP mostrado no desktop. Exemplo: `192.168.0.10`.",
                     style = MaterialTheme.typography.labelMedium,
                     color = Color(0xFF7f93ab),
                 )
             }
         }
     }
+}
+
+private fun buildApiBase(rawHost: String): String {
+    val trimmed = rawHost.trim()
+    if (trimmed.isEmpty()) return ""
+    val withoutScheme = trimmed.removePrefix("http://").removePrefix("https://")
+    val hostOnly = withoutScheme.substringBefore('/').substringBefore(':').trim()
+    if (hostOnly.isEmpty()) return ""
+    return "http://$hostOnly:3847"
 }
