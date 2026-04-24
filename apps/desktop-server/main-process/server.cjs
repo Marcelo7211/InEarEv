@@ -1972,9 +1972,9 @@ function createServices(app) {
     const targetMs =
       process.platform === 'win32'
         ? hasActiveWebRtcLatencyProfile('provocal')
-          ? 12
+          ? 10
           : hasActiveWebRtcLatencyProfile('pro')
-            ? 16
+            ? 14
             : 40
         : 80
     const targetBytes = Math.round((MVP_SAMPLE_RATE_HZ * bytesPerFrame * targetMs) / 1000)

@@ -56,7 +56,7 @@ class PcmAudioTrackSink(private val sampleRate: Int = 48_000) {
             when (latencyProfile) {
                 "provocal" -> {
                     maxQueuedAudioMs = 12
-                    maxQueuedFramesCap = 1
+                    maxQueuedFramesCap = 2
                     bufBytes = minBuf
                     useLowLatencyHardware = true
                     writerWaitMs = 1L
@@ -69,7 +69,7 @@ class PcmAudioTrackSink(private val sampleRate: Int = 48_000) {
                     writerWaitMs = 4L
                 }
                 "pro" -> {
-                    maxQueuedAudioMs = 18
+                    maxQueuedAudioMs = 14
                     maxQueuedFramesCap = 1
                     bufBytes = minBuf
                     useLowLatencyHardware = true
