@@ -425,7 +425,7 @@ private fun MixerStripCard(
     eqLocked: Boolean = false,
 ) {
     val accent = channelAccentColor(channel?.id ?: title, channel?.color, channel?.captureInputIndex)
-    val iconBadge = channelIconBadge(channel?.icon)
+    val iconGlyph = channelIconGlyph(channel?.icon)
     val displayTitle =
         channel?.name
             ?.trim()
@@ -474,7 +474,7 @@ private fun MixerStripCard(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = iconBadge,
+                        text = iconGlyph,
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.Bold,
                         color = accent,
@@ -995,25 +995,16 @@ private fun vuVisualDbLabel(v: Float): String {
     return String.format("%.0f", db)
 }
 
-private fun channelIconBadge(icon: String?): String =
+private fun channelIconGlyph(icon: String?): String =
     when (icon?.trim()?.lowercase()) {
-        "kick" -> "KD"
-        "snare" -> "SD"
-        "tom1" -> "T1"
-        "tom2" -> "T2"
-        "floor" -> "FT"
-        "hihat" -> "HH"
-        "crash" -> "CR"
-        "ride" -> "RD"
-        "overhead" -> "OH"
-        "bass" -> "BS"
-        "guitar" -> "GT"
-        "keys" -> "KY"
-        "vocal" -> "VO"
-        "click" -> "CL"
-        "track" -> "TR"
-        "mic" -> "MC"
-        else -> "CH"
+        "kick", "snare", "tom1", "tom2", "floor", "hihat", "crash", "ride" -> "🥁"
+        "overhead", "mic" -> "🎙"
+        "bass", "guitar" -> "🎸"
+        "keys" -> "🎹"
+        "vocal" -> "🎤"
+        "click" -> "⏱"
+        "track" -> "🎵"
+        else -> "🎚"
     }
 
 private fun channelVuLevel(ch: ChannelStrip, levelsByIndex: Map<String, Double>): Float {
