@@ -246,12 +246,13 @@ class InEarViewModel(application: Application) : AndroidViewModel(application) {
     fun postTelemetry(rttMs: Double?, statsSnapshot: com.inear.android.audio.RetornoStats) {
         val s = _session.value
         if (s.token.isEmpty()) return
+        val effectiveRttMs = rttMs ?: statsSnapshot.rttMs
         viewModelScope.launch {
             try {
                 repository.postTelemetry(
                     s.apiBase,
                     s.token,
-                    rttMs,
+                    effectiveRttMs,
                     statsSnapshot.sequenceGaps,
                     statsSnapshot.estimatedLatencyMs,
                     statsSnapshot.queuedFrames,

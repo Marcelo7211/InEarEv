@@ -3,10 +3,12 @@ package com.inear.android.audio
 import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.media.MediaRecorder
 import com.inear.android.net.InEarRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -40,6 +42,8 @@ data class RetornoStats(
     val queuedAudioMs: Int = 0,
     val halQueuedMs: Int = 0,
     val estimatedLatencyMs: Int = 0,
+    val rttMs: Double? = null,
+    val jitterMs: Double? = null,
 )
 
 /**
@@ -59,6 +63,8 @@ class RetornoAudioEngine(
         appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
     private var job: Job? = null
+    private var statsJob: Job? = null
+    private var audioDeviceModule: JavaAudioDeviceModule? = null
     private var peerConnectionFactory: PeerConnectionFactory? = null
     private var peerConnection: PeerConnection? = null
     private var remoteAudioTrack: AudioTrack? = null
@@ -116,6 +122,8 @@ class RetornoAudioEngine(
     }
 
     private fun stopPeerConnection() {
+        statsJob?.cancel()
+        statsJob = null
         try {
             remoteAudioTrack?.setEnabled(false)
         } catch (_: Exception) {
@@ -149,11 +157,20 @@ class RetornoAudioEngine(
                 MediaConstraints().apply {
                     mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
                     mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "false"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googEchoCancellation", "false"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googAutoGainControl", "false"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googNoiseSuppression", "false"))
+                    mandatory.add(MediaConstraints.KeyValuePair("googHighpassFilter", "false"))
                 },
             )
-        setLocalDescriptionBlocking(pc, offer)
+        val tunedOffer =
+            SessionDescription(
+                offer.type,
+                tuneAudioSdpForLatency(offer.description, retornoLatencyProfile),
+            )
+        setLocalDescriptionBlocking(pc, tunedOffer)
         iceGatheringDone.await(1200, TimeUnit.MILLISECONDS)
-        val localSdp = pc.localDescription?.description ?: offer.description
+        val localSdp = pc.localDescription?.description ?: tunedOffer.description
         val answer = repository.createWebRtcAnswer(apiBase, token, localSdp, retornoLatencyProfile)
         if (!running) return
         if (answer.sdp.isBlank()) {
@@ -163,6 +180,7 @@ class RetornoAudioEngine(
             pc,
             SessionDescription(SessionDescription.Type.ANSWER, answer.sdp),
         )
+        startRtcStatsPolling(pc)
         updateStats(
             transport = "webrtc",
             connected = false,
@@ -317,6 +335,8 @@ class RetornoAudioEngine(
                 queuedFrames = 0,
                 queuedAudioMs = 0,
                 halQueuedMs = 0,
+                rttMs = current.rttMs,
+                jitterMs = current.jitterMs,
             )
         }
     }
@@ -397,12 +417,18 @@ class RetornoAudioEngine(
                     .setEnableInternalTracer(false)
                     .createInitializationOptions(),
             )
-            val audioDeviceModule = JavaAudioDeviceModule.builder(appContext).createAudioDeviceModule()
+            audioDeviceModule?.release()
+            audioDeviceModule =
+                JavaAudioDeviceModule
+                    .builder(appContext)
+                    .setAudioSource(MediaRecorder.AudioSource.UNPROCESSED)
+                    .setUseHardwareAcousticEchoCanceler(false)
+                    .setUseHardwareNoiseSuppressor(false)
+                    .createAudioDeviceModule()
             val created =
                 PeerConnectionFactory.builder()
                     .setAudioDeviceModule(audioDeviceModule)
                     .createPeerConnectionFactory()
-            audioDeviceModule.release()
             peerConnectionFactory = created
             return created
         }
@@ -422,9 +448,9 @@ class RetornoAudioEngine(
 
     private fun maxJitterPacketsForLatency(latency: String): Int =
         when (latency) {
-            "provocal" -> 4
-            "pro" -> 5
-            "low" -> 6
+            "provocal" -> 3
+            "pro" -> 4
+            "low" -> 5
             "wifi24" -> 12
             "mid200" -> 14
             else -> 8
@@ -434,8 +460,8 @@ class RetornoAudioEngine(
         if (sdp.isBlank()) return sdp
         val desiredPtime =
             when (latency) {
-                "provocal" -> 10
-                "pro" -> 10
+                "provocal" -> 3
+                "pro" -> 5
                 "low" -> 10
                 "wifi24" -> 20
                 "mid200" -> 20
@@ -490,34 +516,34 @@ class RetornoAudioEngine(
             }
         params["minptime"] = desiredPtime.toString()
         val aggressive = latency == "pro" || latency == "provocal"
-        params["stereo"] = if (aggressive) "0" else "1"
-        params["sprop-stereo"] = if (aggressive) "0" else "1"
+        params["stereo"] = "1"
+        params["sprop-stereo"] = "1"
         params["maxplaybackrate"] = SAMPLE_RATE.toString()
-        params["useinbandfec"] = "1"
+        params["useinbandfec"] = if (aggressive) "0" else "1"
         params["usedtx"] = "0"
         params["cbr"] = if (aggressive) "0" else params["cbr"] ?: "0"
         params["maxaveragebitrate"] =
             when (latency) {
-                "provocal" -> "64000"
-                "pro" -> "96000"
+                "provocal" -> "128000"
+                "pro" -> "160000"
                 else -> params["maxaveragebitrate"] ?: "128000"
             }
         params["x-google-min-bitrate"] =
             when (latency) {
-                "provocal" -> "48"
-                "pro" -> "64"
+                "provocal" -> "96"
+                "pro" -> "128"
                 else -> "96"
             }
         params["x-google-start-bitrate"] =
             when (latency) {
-                "provocal" -> "64"
-                "pro" -> "80"
+                "provocal" -> "128"
+                "pro" -> "160"
                 else -> "128"
             }
         params["x-google-max-bitrate"] =
             when (latency) {
-                "provocal" -> "96"
-                "pro" -> "128"
+                "provocal" -> "160"
+                "pro" -> "192"
                 else -> "160"
             }
         return "a=fmtp:$opusPayload " + params.entries.joinToString(";") { "${it.key}=${it.value}" }
@@ -600,5 +626,44 @@ class RetornoAudioEngine(
             remoteAudioTrack?.setVolume(g.toDouble())
         } catch (_: Exception) {
         }
+    }
+
+    private fun startRtcStatsPolling(pc: PeerConnection) {
+        statsJob?.cancel()
+        statsJob =
+            scope.launch(Dispatchers.IO) {
+                while (running && peerConnection === pc) {
+                    try {
+                        pc.getStats { report ->
+                            var rttMs: Double? = null
+                            var jitterMs: Double? = null
+                            for (stat in report.statsMap.values) {
+                                if (stat.type == "candidate-pair") {
+                                    val nominated = stat.members["nominated"] as? Boolean
+                                    val state = stat.members["state"] as? String
+                                    val rtt = stat.members["currentRoundTripTime"] as? Double
+                                    if (nominated == true && state == "succeeded" && rtt != null) {
+                                        rttMs = rtt * 1000.0
+                                    }
+                                } else if (stat.type == "inbound-rtp") {
+                                    val kind = stat.members["kind"] as? String
+                                    val jitter = stat.members["jitter"] as? Double
+                                    if (kind == "audio" && jitter != null) {
+                                        jitterMs = jitter * 1000.0
+                                    }
+                                }
+                            }
+                            _stats.update { current ->
+                                current.copy(
+                                    rttMs = rttMs ?: current.rttMs,
+                                    jitterMs = jitterMs ?: current.jitterMs,
+                                )
+                            }
+                        }
+                    } catch (_: Exception) {
+                    }
+                    delay(1000)
+                }
+            }
     }
 }

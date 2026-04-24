@@ -1513,7 +1513,7 @@ function createServices(app) {
   const WEBRTC_PCM_SAMPLES_STEREO = WEBRTC_PCM_FRAMES_PER_PUSH * 2
 
   /**
-   * @type {Map<string, { id: string, pc: any, source: any, track: any, latencyProfile?: string, pcmPending?: Int16Array, pcmPendingUsed?: number, lastAudioPushAt?: number }>}
+   * @type {Map<string, { id: string, pc: any, source: any, track: any, latencyProfile?: string, pcmPending?: Int16Array, pcmPendingUsed?: number, lastAudioPushAt?: number, statsTimer?: any, lastRtcStats?: { rttMs: number | null, jitterMs: number | null, at: number } | null }>}
    */
   const webrtcSessions = new Map()
   /** @type {Map<string, Set<string>>} */
@@ -1585,9 +1585,83 @@ function createServices(app) {
         sess && sess.pc && sess.pc.signalingState ? String(sess.pc.signalingState) : null,
       hasTrack: Boolean(sess && sess.track),
       pendingSamples: sess && typeof sess.pcmPendingUsed === 'number' ? sess.pcmPendingUsed : 0,
+      rttMs:
+        sess && sess.lastRtcStats && typeof sess.lastRtcStats.rttMs === 'number'
+          ? Number(sess.lastRtcStats.rttMs.toFixed(2))
+          : null,
+      jitterMs:
+        sess && sess.lastRtcStats && typeof sess.lastRtcStats.jitterMs === 'number'
+          ? Number(sess.lastRtcStats.jitterMs.toFixed(2))
+          : null,
+      statsAgeMs:
+        sess && sess.lastRtcStats && sess.lastRtcStats.at
+          ? Math.max(0, Date.now() - sess.lastRtcStats.at)
+          : null,
       lastAudioPushMsAgo:
         sess && sess.lastAudioPushAt ? Math.max(0, Date.now() - sess.lastAudioPushAt) : null,
     }))
+  }
+  function normalizeRtcStatsReports(stats) {
+    if (!stats) return []
+    if (typeof stats.values === 'function') {
+      try {
+        return Array.from(stats.values())
+      } catch {
+        /* ignore */
+      }
+    }
+    if (Array.isArray(stats)) return stats
+    if (typeof stats.forEach === 'function') {
+      const items = []
+      try {
+        stats.forEach((value) => items.push(value))
+        return items
+      } catch {
+        /* ignore */
+      }
+    }
+    if (typeof stats === 'object') return Object.values(stats)
+    return []
+  }
+  function extractRtcNetworkStats(stats) {
+    let rttMs = null
+    let jitterMs = null
+    for (const report of normalizeRtcStatsReports(stats)) {
+      if (!report || typeof report !== 'object') continue
+      if (
+        report.type === 'candidate-pair' &&
+        report.nominated === true &&
+        report.state === 'succeeded' &&
+        typeof report.currentRoundTripTime === 'number'
+      ) {
+        rttMs = report.currentRoundTripTime * 1000
+      }
+      if (
+        (report.type === 'inbound-rtp' || report.type === 'remote-inbound-rtp') &&
+        (report.kind === 'audio' || report.mediaType === 'audio') &&
+        typeof report.jitter === 'number'
+      ) {
+        jitterMs = report.jitter * 1000
+      }
+    }
+    return { rttMs, jitterMs }
+  }
+  function startWebRtcSessionStatsPolling(sessionId, pc) {
+    return setInterval(async () => {
+      const sess = webrtcSessions.get(sessionId)
+      if (!sess || !pc || typeof pc.getStats !== 'function') return
+      try {
+        const stats = await pc.getStats()
+        const next = extractRtcNetworkStats(stats)
+        sess.lastRtcStats = {
+          rttMs: next.rttMs,
+          jitterMs: next.jitterMs,
+          at: Date.now(),
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 1000)
   }
   function hasActiveWebRtcLatencyProfile(profile) {
     for (const sess of webrtcSessions.values()) {
@@ -3059,7 +3133,7 @@ function createServices(app) {
       if (!answer || !answer.sdp) {
         throw new Error('createAnswer_returned_empty')
       }
-      const tunedAnswerSdp = answer && answer.sdp ? answer.sdp : ''
+      const tunedAnswerSdp = answer && answer.sdp ? tuneWebRtcAudioSdp(answer.sdp, latencyProfile) : ''
       if (!tunedAnswerSdp || !String(tunedAnswerSdp).trim()) {
         throw new Error('answer_sdp_empty')
       }
@@ -3077,7 +3151,17 @@ function createServices(app) {
       if (!localAnswerSdp || !String(localAnswerSdp).trim()) {
         throw new Error('local_answer_sdp_empty')
       }
-      webrtcSessions.set(sessionId, { id: strip.id, pc, source, track, latencyProfile })
+      const session = {
+        id: strip.id,
+        pc,
+        source,
+        track,
+        latencyProfile,
+        lastRtcStats: null,
+        statsTimer: null,
+      }
+      webrtcSessions.set(sessionId, session)
+      session.statsTimer = startWebRtcSessionStatsPolling(sessionId, pc)
       let bucket = webrtcSessionsByMusician.get(strip.id)
       if (!bucket) {
         bucket = new Set()
@@ -3536,6 +3620,11 @@ function createServices(app) {
       if (byM.size === 0) webrtcSessionsByMusician.delete(sess.id)
     }
     try {
+      if (sess.statsTimer) clearInterval(sess.statsTimer)
+    } catch {
+      /* */
+    }
+    try {
       if (sess.track) sess.track.stop()
     } catch {
       /* */
@@ -3587,8 +3676,10 @@ function createServices(app) {
       latencyProfile === 'wifi24' || latencyProfile === 'mid200'
         ? 20
         : latencyProfile === 'provocal'
-          ? 10
-          : 10
+          ? 3
+          : latencyProfile === 'pro'
+            ? 5
+            : 10
     const lines = raw.replace(/\r\n/g, '\n').split('\n')
     const mediaIndex = lines.findIndex((line) => line.startsWith('m=audio '))
     if (mediaIndex === -1) return raw
@@ -3624,19 +3715,19 @@ function createServices(app) {
         params.set(kv.slice(0, idx).trim(), kv.slice(idx + 1).trim())
       })
     params.set('minptime', String(desiredPtime))
-    params.set('stereo', aggressive ? '0' : '1')
-    params.set('sprop-stereo', aggressive ? '0' : '1')
+    params.set('stereo', '1')
+    params.set('sprop-stereo', '1')
     params.set('maxplaybackrate', String(MVP_SAMPLE_RATE_HZ))
     params.set('usedtx', '0')
-    params.set('useinbandfec', '1')
+    params.set('useinbandfec', aggressive ? '0' : '1')
     params.set('cbr', aggressive ? '0' : params.get('cbr') || '0')
     params.set(
       'maxaveragebitrate',
-      latencyProfile === 'provocal' ? '80000' : aggressive ? '112000' : params.get('maxaveragebitrate') || '128000',
+      latencyProfile === 'provocal' ? '128000' : aggressive ? '160000' : params.get('maxaveragebitrate') || '128000',
     )
-    params.set('x-google-min-bitrate', latencyProfile === 'provocal' ? '64' : aggressive ? '80' : '96')
-    params.set('x-google-start-bitrate', latencyProfile === 'provocal' ? '80' : aggressive ? '96' : '128')
-    params.set('x-google-max-bitrate', latencyProfile === 'provocal' ? '112' : aggressive ? '144' : '160')
+    params.set('x-google-min-bitrate', latencyProfile === 'provocal' ? '96' : aggressive ? '128' : '96')
+    params.set('x-google-start-bitrate', latencyProfile === 'provocal' ? '128' : aggressive ? '160' : '128')
+    params.set('x-google-max-bitrate', latencyProfile === 'provocal' ? '160' : aggressive ? '192' : '160')
     return `a=fmtp:${payload} ${Array.from(params.entries())
       .map(([k, v]) => `${k}=${v}`)
       .join(';')}`
