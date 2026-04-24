@@ -3133,7 +3133,7 @@ function createServices(app) {
       if (!answer || !answer.sdp) {
         throw new Error('createAnswer_returned_empty')
       }
-      const tunedAnswerSdp = answer && answer.sdp ? tuneWebRtcAudioSdp(answer.sdp, latencyProfile) : ''
+      const tunedAnswerSdp = answer && answer.sdp ? answer.sdp : ''
       if (!tunedAnswerSdp || !String(tunedAnswerSdp).trim()) {
         throw new Error('answer_sdp_empty')
       }
