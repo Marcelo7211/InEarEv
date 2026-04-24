@@ -1526,6 +1526,28 @@ function createServices(app) {
   function feedWebRtcSessionAudio(sess, interleavedBlock) {
     if (!sess || !sess.source) return true
     if (!(interleavedBlock instanceof Int16Array) || interleavedBlock.length === 0) return true
+    if (
+      (sess.pcmPendingUsed || 0) === 0 &&
+      interleavedBlock.length === WEBRTC_PCM_SAMPLES_STEREO
+    ) {
+      try {
+        sess.source.onData({
+          samples: interleavedBlock,
+          sampleRate: MVP_SAMPLE_RATE_HZ,
+          bitsPerSample: 16,
+          channelCount: 2,
+          numberOfFrames: WEBRTC_PCM_FRAMES_PER_PUSH,
+        })
+        sess.lastAudioPushAt = Date.now()
+        return true
+      } catch (e) {
+        console.warn(
+          '[inear] WebRTC onData:',
+          e && e.message ? String(e.message) : String(e),
+        )
+        return false
+      }
+    }
     if (!sess.pcmPending) {
       sess.pcmPending = new Int16Array(8192)
       sess.pcmPendingUsed = 0
@@ -1681,7 +1703,7 @@ function createServices(app) {
       process.platform === 'win32' &&
       (hasActiveWebRtcLatencyProfile('provocal') || hasActiveWebRtcLatencyProfile('pro'))
     ) {
-      return 128
+      return WEBRTC_PCM_FRAMES_PER_PUSH
     }
     return configured
   }
