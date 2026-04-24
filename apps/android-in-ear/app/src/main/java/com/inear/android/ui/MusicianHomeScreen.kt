@@ -425,6 +425,7 @@ private fun MixerStripCard(
     eqLocked: Boolean = false,
 ) {
     val accent = channelAccentColor(channel?.id ?: title, channel?.color, channel?.captureInputIndex)
+    val iconBadge = channelIconBadge(channel?.icon)
     val displayTitle =
         channel?.name
             ?.trim()
@@ -464,6 +465,21 @@ private fun MixerStripCard(
                         .height(38.dp)
                         .background(accent, RoundedCornerShape(999.dp)),
                 )
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(RoundedCornerShape(9.dp))
+                        .border(1.dp, accent.copy(alpha = 0.38f), RoundedCornerShape(9.dp))
+                        .background(Color(0xFF132030), RoundedCornerShape(9.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = iconBadge,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = accent,
+                    )
+                }
                 Column(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
@@ -978,6 +994,27 @@ private fun vuVisualDbLabel(v: Float): String {
     val db = -48f + (48f * meter)
     return String.format("%.0f", db)
 }
+
+private fun channelIconBadge(icon: String?): String =
+    when (icon?.trim()?.lowercase()) {
+        "kick" -> "KD"
+        "snare" -> "SD"
+        "tom1" -> "T1"
+        "tom2" -> "T2"
+        "floor" -> "FT"
+        "hihat" -> "HH"
+        "crash" -> "CR"
+        "ride" -> "RD"
+        "overhead" -> "OH"
+        "bass" -> "BS"
+        "guitar" -> "GT"
+        "keys" -> "KY"
+        "vocal" -> "VO"
+        "click" -> "CL"
+        "track" -> "TR"
+        "mic" -> "MC"
+        else -> "CH"
+    }
 
 private fun channelVuLevel(ch: ChannelStrip, levelsByIndex: Map<String, Double>): Float {
     val idx = ch.captureInputIndex ?: return 0f

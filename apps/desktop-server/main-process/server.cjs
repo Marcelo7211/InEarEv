@@ -2450,7 +2450,7 @@ function createServices(app) {
         if (raw < 0 || raw >= nCh) {
           out[ch.id] = 0
         } else {
-          out[ch.id] = sampleInput(capBlock, i, nCh, raw) * 0.98
+          out[ch.id] = sampleInput(capBlock, i, nCh, raw)
         }
         continue
       }
@@ -2470,10 +2470,10 @@ function createServices(app) {
           ? tap
           : legacy || 'sum'
       let mm
-      if (mode === 'L') mm = L * 0.9
-      else if (mode === 'R') mm = R * 0.9
-      else if (nCh > 2) mm = sumAll * 0.98
-      else mm = (L + R) * 0.45
+      if (mode === 'L') mm = L * 0.96
+      else if (mode === 'R') mm = R * 0.96
+      else if (nCh > 2) mm = sumAll
+      else mm = (L + R) * 0.5
       out[ch.id] = mm
     }
     return out
@@ -3632,11 +3632,11 @@ function createServices(app) {
     params.set('cbr', aggressive ? '0' : params.get('cbr') || '0')
     params.set(
       'maxaveragebitrate',
-      latencyProfile === 'provocal' ? '64000' : aggressive ? '96000' : params.get('maxaveragebitrate') || '128000',
+      latencyProfile === 'provocal' ? '80000' : aggressive ? '112000' : params.get('maxaveragebitrate') || '128000',
     )
-    params.set('x-google-min-bitrate', latencyProfile === 'provocal' ? '48' : aggressive ? '64' : '96')
-    params.set('x-google-start-bitrate', latencyProfile === 'provocal' ? '64' : aggressive ? '80' : '128')
-    params.set('x-google-max-bitrate', latencyProfile === 'provocal' ? '96' : aggressive ? '128' : '160')
+    params.set('x-google-min-bitrate', latencyProfile === 'provocal' ? '64' : aggressive ? '80' : '96')
+    params.set('x-google-start-bitrate', latencyProfile === 'provocal' ? '80' : aggressive ? '96' : '128')
+    params.set('x-google-max-bitrate', latencyProfile === 'provocal' ? '112' : aggressive ? '144' : '160')
     return `a=fmtp:${payload} ${Array.from(params.entries())
       .map(([k, v]) => `${k}=${v}`)
       .join(';')}`
@@ -3875,7 +3875,7 @@ function createServices(app) {
           },
         )
         // ~-1,1 → s16 com margem (menos clipping duro / menos artefactos “metálicos”)
-        const gOut = 26500
+        const gOut = 30000
         interleaved[i * 2] = Math.max(
           -32768,
           Math.min(32767, Math.round(l * gOut)),

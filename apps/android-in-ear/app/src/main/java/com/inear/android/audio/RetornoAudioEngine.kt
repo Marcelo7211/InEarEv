@@ -422,8 +422,8 @@ class RetornoAudioEngine(
 
     private fun maxJitterPacketsForLatency(latency: String): Int =
         when (latency) {
-            "provocal" -> 3
-            "pro" -> 4
+            "provocal" -> 4
+            "pro" -> 5
             "low" -> 6
             "wifi24" -> 12
             "mid200" -> 14
