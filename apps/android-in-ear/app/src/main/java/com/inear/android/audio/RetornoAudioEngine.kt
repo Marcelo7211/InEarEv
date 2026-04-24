@@ -154,8 +154,7 @@ class RetornoAudioEngine(
         setLocalDescriptionBlocking(pc, offer)
         iceGatheringDone.await(1200, TimeUnit.MILLISECONDS)
         val localSdp = pc.localDescription?.description ?: offer.description
-        val tunedLocalSdp = tuneAudioSdpForLatency(localSdp, retornoLatencyProfile)
-        val answer = repository.createWebRtcAnswer(apiBase, token, tunedLocalSdp, retornoLatencyProfile)
+        val answer = repository.createWebRtcAnswer(apiBase, token, localSdp, retornoLatencyProfile)
         if (!running) return
         if (answer.sdp.isBlank()) {
             error("Servidor WebRTC respondeu SDP vazia")
@@ -490,8 +489,6 @@ class RetornoAudioEngine(
                 params[parts[0].trim()] = parts[1].trim()
             }
         params["minptime"] = desiredPtime.toString()
-        params["ptime"] = desiredPtime.toString()
-        params["maxptime"] = desiredPtime.toString()
         val aggressive = latency == "pro" || latency == "provocal"
         params["stereo"] = if (aggressive) "0" else "1"
         params["sprop-stereo"] = if (aggressive) "0" else "1"

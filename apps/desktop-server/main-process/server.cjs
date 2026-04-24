@@ -3041,11 +3041,10 @@ function createServices(app) {
           disposeWebRtcSession(sessionId)
         }
       }
-      const tunedOfferSdp = tuneWebRtcAudioSdp(sdp, latencyProfile)
       await pc.setRemoteDescription(
         new wrtc.RTCSessionDescription({
           type: 'offer',
-          sdp: tunedOfferSdp,
+          sdp,
         }),
       )
       const answer = await pc.createAnswer()
@@ -3617,8 +3616,6 @@ function createServices(app) {
         params.set(kv.slice(0, idx).trim(), kv.slice(idx + 1).trim())
       })
     params.set('minptime', String(desiredPtime))
-    params.set('ptime', String(desiredPtime))
-    params.set('maxptime', String(desiredPtime))
     params.set('stereo', aggressive ? '0' : '1')
     params.set('sprop-stereo', aggressive ? '0' : '1')
     params.set('maxplaybackrate', String(MVP_SAMPLE_RATE_HZ))
