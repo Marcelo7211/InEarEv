@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
@@ -91,6 +92,9 @@ private val VuGrad = Brush.verticalGradient(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MusicianHomeScreen(vm: InEarViewModel) {
+    val configuration = LocalConfiguration.current
+    val isLandscape = configuration.screenWidthDp > configuration.screenHeightDp
+    val boardHeight = if (isLandscape) configuration.screenHeightDp.dp else 420.dp
     val showfile by vm.showfile.collectAsState()
     val stats by vm.audioEngine.stats.collectAsState()
     val net by vm.network.collectAsState()
@@ -162,7 +166,7 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                         style = MaterialTheme.typography.titleMedium,
                     )
                 },
-                modifier = Modifier.height(52.dp),
+                modifier = Modifier.height(68.dp),
                 colors =
                     TopAppBarDefaults.topAppBarColors(
                         containerColor = Color(0xFF111925),
@@ -344,7 +348,7 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(420.dp)
+                    .height(boardHeight)
                     .border(1.dp, PanelBorder, RoundedCornerShape(10.dp))
                     .background(PanelBg, RoundedCornerShape(10.dp))
                     .padding(horizontal = 4.dp, vertical = 6.dp)
