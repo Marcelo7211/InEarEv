@@ -1681,7 +1681,7 @@ function createServices(app) {
       process.platform === 'win32' &&
       (hasActiveWebRtcLatencyProfile('provocal') || hasActiveWebRtcLatencyProfile('pro'))
     ) {
-      return 64
+      return 128
     }
     return configured
   }

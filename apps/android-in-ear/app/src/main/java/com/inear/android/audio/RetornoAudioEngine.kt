@@ -436,15 +436,15 @@ class RetornoAudioEngine(
         cfg.rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
         cfg.tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED
         cfg.continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
-        cfg.audioJitterBufferFastAccelerate = true
+        cfg.audioJitterBufferFastAccelerate = latency != "pro" && latency != "provocal"
         cfg.audioJitterBufferMaxPackets = maxJitterPacketsForLatency(latency)
         return cfg
     }
 
     private fun maxJitterPacketsForLatency(latency: String): Int =
         when (latency) {
-            "provocal" -> 2
-            "pro" -> 2
+            "provocal" -> 3
+            "pro" -> 3
             "low" -> 5
             "wifi24" -> 12
             "mid200" -> 14
