@@ -1787,7 +1787,7 @@ function MacAudioInputsPanel({
       }
     }
     void loadDebug()
-    const t = setInterval(loadDebug, 1000)
+    const t = setInterval(loadDebug, 1600)
     return () => {
       cancelled = true
       clearInterval(t)

@@ -121,4 +121,53 @@ describe('mixMusicianStereoFromMonoSources com escopo órfão', () => {
     expect(Math.abs(r)).toBeGreaterThan(0.01)
     expect(Math.abs(r)).toBeLessThan(0.3)
   })
+
+  it('preserva headroom melhor quando vários ganhos sobrecarregam a mix', () => {
+    const sf: Showfile = {
+      version: 1,
+      name: 't',
+      networkProfile: 'auto',
+      channels: [
+        {
+          id: 'if_l',
+          name: 'L',
+          gain: 4,
+          pan: -1,
+          mute: false,
+          eq: { lowDb: 0, midDb: 0, highDb: 0 },
+          lockEq: false,
+          sourceTap: 'L',
+        },
+        {
+          id: 'if_r',
+          name: 'R',
+          gain: 4,
+          pan: 1,
+          mute: false,
+          eq: { lowDb: 0, midDb: 0, highDb: 0 },
+          lockEq: false,
+          sourceTap: 'R',
+        },
+      ],
+      groups: [],
+      musicians: [
+        {
+          id: 'm1',
+          name: 'M1',
+          username: 'u1',
+          role: 'musician',
+          sendGains: { if_l: 4, if_r: 4 },
+          mute: false,
+          scope: { channelIds: ['if_l', 'if_r'], groupIds: [] },
+          eqByChannel: {},
+        },
+      ],
+    }
+    const m = sf.musicians[0]!
+    const { l, r } = mixMusicianStereoFromMonoSources(sf, m, { if_l: 1, if_r: 1 })
+    expect(Math.abs(l)).toBeLessThanOrEqual(1)
+    expect(Math.abs(r)).toBeLessThanOrEqual(1)
+    expect(Math.abs(l)).toBeGreaterThan(0.7)
+    expect(Math.abs(r)).toBeGreaterThan(0.7)
+  })
 })

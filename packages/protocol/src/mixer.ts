@@ -89,11 +89,30 @@ export function groupStereoFromMono(
   return { l: l * g.gain, r: r * g.gain }
 }
 
-/** Saturação por canal (L/R), sem limitador “de bus” que reparte ganho entre fontes. */
-function clip(l: number, r: number): { l: number; r: number } {
+const OVERLOAD_DRIVE = 1.15
+const OVERLOAD_DRIVE_NORM = Math.tanh(OVERLOAD_DRIVE)
+
+/**
+ * Em overload real, aplica trim estéreo antes da saturação para evitar esmagar
+ * demais a mix inteira quando vários sends/gains somam ao mesmo tempo.
+ */
+function softenOverload(l: number, r: number): { l: number; r: number } {
+  const peak = Math.max(Math.abs(l), Math.abs(r))
+  if (peak <= 1) return { l, r }
+  const scaledL = l / peak
+  const scaledR = r / peak
   return {
-    l: Math.tanh(l),
-    r: Math.tanh(r),
+    l: Math.tanh(scaledL * OVERLOAD_DRIVE) / OVERLOAD_DRIVE_NORM,
+    r: Math.tanh(scaledR * OVERLOAD_DRIVE) / OVERLOAD_DRIVE_NORM,
+  }
+}
+
+/** Saturação por canal (L/R), com headroom suave em overload real. */
+function clip(l: number, r: number): { l: number; r: number } {
+  const softened = softenOverload(l, r)
+  return {
+    l: Math.tanh(softened.l),
+    r: Math.tanh(softened.r),
   }
 }
 

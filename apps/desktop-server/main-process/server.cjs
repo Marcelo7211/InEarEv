@@ -3818,6 +3818,11 @@ function createServices(app) {
     const block = audioBlockSamples()
     const delay = (1000 * block) / MVP_SAMPLE_RATE_HZ
     const base = sampleClock
+    const sf = state.showfile
+    const activeMusicianIds = activeMusicianIdsForAudio()
+    const musicianById = new Map(sf.musicians.map((m) => [m.id, m]))
+    const fadeStep = 1 / muteFadeSamples()
+    const gOut = 30000
     sampleClock += block
     audioSeq += 1
     const ts = process.hrtime.bigint()
@@ -3838,8 +3843,21 @@ function createServices(app) {
         )
       }
     }
-    for (const musicianId of activeMusicianIdsForAudio()) {
-      const mStrip = state.showfile.musicians.find((x) => x.id === musicianId)
+    const monoFrames = new Array(block)
+    if (useCapture) {
+      for (let i = 0; i < block; i++) {
+        monoFrames[i] = monoByChannelFromCapture(capBlock, i, nCh)
+      }
+    } else if (captureChild) {
+      const silentFrame = silentMonoByChannel()
+      monoFrames.fill(silentFrame)
+    } else {
+      for (let i = 0; i < block; i++) {
+        monoFrames[i] = monoByChannelAt(base + i)
+      }
+    }
+    for (const musicianId of activeMusicianIds) {
+      const mStrip = musicianById.get(musicianId)
       if (!mStrip) continue
       let rampState = muteRampByMusician.get(musicianId)
       if (!rampState) {
@@ -3848,14 +3866,9 @@ function createServices(app) {
       }
       const interleaved = new Int16Array(block * 2)
       for (let i = 0; i < block; i++) {
-        const mono = useCapture
-          ? monoByChannelFromCapture(capBlock, i, nCh)
-          : captureChild
-            ? silentMonoByChannel()
-            : monoByChannelAt(base + i)
-        const fadeStep = 1 / muteFadeSamples()
+        const mono = monoFrames[i]
         const { l, r } = mixMusicianStereoFromMonoSources(
-          state.showfile,
+          sf,
           mStrip,
           mono,
           {
@@ -3875,7 +3888,6 @@ function createServices(app) {
           },
         )
         // ~-1,1 → s16 com margem (menos clipping duro / menos artefactos “metálicos”)
-        const gOut = 30000
         interleaved[i * 2] = Math.max(
           -32768,
           Math.min(32767, Math.round(l * gOut)),
@@ -3893,7 +3905,7 @@ function createServices(app) {
             serverTimestampNs: ts,
             pcmInterleavedS16: interleaved,
             codec:
-              state.showfile.networkProfile === 'wifi_2_4' ? 'mulaw_u8' : 'pcm_s16',
+              sf.networkProfile === 'wifi_2_4' ? 'mulaw_u8' : 'pcm_s16',
           }),
         )
         audioSock.send(udpWire, udpTarget.port, udpTarget.address, (err) => {
