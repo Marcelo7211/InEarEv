@@ -163,10 +163,10 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                 title = {
                     Text(
                         "Olá, $headerName",
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleLarge,
                     )
                 },
-                modifier = Modifier.height(68.dp),
+                modifier = Modifier.height(102.dp),
                 colors =
                     TopAppBarDefaults.topAppBarColors(
                         containerColor = Color(0xFF111925),
