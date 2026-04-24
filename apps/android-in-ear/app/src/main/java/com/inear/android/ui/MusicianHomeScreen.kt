@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -188,14 +189,11 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
             return@Scaffold
         }
 
+        val pageScroll = rememberScrollState()
         Column(
-            modifier = Modifier.fillMaxSize().padding(pad).padding(10.dp),
+            modifier = Modifier.fillMaxSize().verticalScroll(pageScroll).padding(pad).padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            val musicianDisplayName =
-                m.name
-                    .trim()
-                    .takeUnless { it.isBlank() || it.contains("default", ignoreCase = true) }
             Card(shape = RoundedCornerShape(14.dp)) {
                 Column(
                     modifier =
@@ -248,19 +246,6 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                                 onClick = { showRetornoStatus = true },
                             )
                         }
-                    }
-                    if (musicianDisplayName != null) {
-                        Text(
-                            "${musicianDisplayName} · ${sf.name}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = Color(0xFF8ab4ff),
-                        )
-                    } else {
-                        Text(
-                            sf.name,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = Color(0xFF8ab4ff),
-                        )
                     }
                 }
             }
@@ -359,7 +344,7 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f)
+                    .height(420.dp)
                     .border(1.dp, PanelBorder, RoundedCornerShape(10.dp))
                     .background(PanelBg, RoundedCornerShape(10.dp))
                     .padding(horizontal = 4.dp, vertical = 6.dp)
@@ -500,32 +485,6 @@ private fun MixerStripCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                }
-                Box(
-                    modifier =
-                        Modifier
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .border(1.dp, if (muted) Color(0xFFf85149) else Color(0xFF44586f), CircleShape)
-                            .background(if (muted) Color(0xFF2b1a22) else Color(0xFF14202e), CircleShape)
-                            .clickable { onToggleMute() },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = if (muted) "🔇" else "🔊",
-                        color = if (muted) Color(0xFFf2f6ff) else Color(0xFFbdd6f7),
-                        style = MaterialTheme.typography.labelSmall,
-                    )
-                    if (muted) {
-                        Box(
-                            modifier =
-                                Modifier
-                                    .width(18.dp)
-                                    .height(2.dp)
-                                    .background(Color(0xFFf85149), RoundedCornerShape(999.dp))
-                                    .rotate(-38f),
-                        )
-                    }
                 }
             }
             Box(
