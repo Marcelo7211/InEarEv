@@ -24,6 +24,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -93,6 +95,7 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
     var master by remember { mutableFloatStateOf(1f) }
     var playing by remember { mutableStateOf(false) }
     var previousLatencyKey by remember { mutableStateOf<String?>(null) }
+    var showRetornoStatus by remember { mutableStateOf(false) }
 
     LaunchedEffect(playing) {
         while (true) {
@@ -176,11 +179,22 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Text(
-                        "Palco pronto",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = Color(0xFFeef4fb),
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "Palco pronto",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = Color(0xFFeef4fb),
+                        )
+                        DeskPillButton(
+                            label = "Status",
+                            active = showRetornoStatus,
+                            onClick = { showRetornoStatus = true },
+                        )
+                    }
                     Text(
                         "${m.name} · ${sf.name}",
                         style = MaterialTheme.typography.labelMedium,
@@ -272,39 +286,18 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
             if (stats.lastError != null) {
                 Text("Erro: ${stats.lastError}", color = MaterialTheme.colorScheme.error)
             }
-            Card(shape = RoundedCornerShape(10.dp)) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(CardBg)
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(5.dp),
-                ) {
-                    Text(
-                        "Como está seu retorno",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = Color(0xFFe8eaed),
-                    )
-                    Text(
-                        "Atraso estimado: ${stats.estimatedLatencyMs} ms · $latencyUserLabel",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = Color(0xFFdbe6f3),
-                    )
-                    Text(
-                        "Conexão: $transportUserLabel · app ${stats.queuedAudioMs} ms · áudio ${stats.halQueuedMs} ms",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF9ab8d8),
-                    )
-                    Text(
+            if (showRetornoStatus) {
+                ReturnStatusDialog(
+                    latencyText = "Atraso estimado: ${stats.estimatedLatencyMs} ms · $latencyUserLabel",
+                    transportText = "Conexão: $transportUserLabel · app ${stats.queuedAudioMs} ms · áudio ${stats.halQueuedMs} ms",
+                    signalText =
                         if (inputLevels?.receiving == true) {
                             "Som vindo do desktop: chegando normalmente"
                         } else {
                             "Som vindo do desktop: sem áudio neste instante"
                         },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (inputLevels?.receiving == true) Color(0xFF81c995) else Color(0xFFf0883e),
-                    )
-                    Text(
+                    signalOk = inputLevels?.receiving == true,
+                    captureText =
                         buildString {
                             append("Entrada do computador: ")
                             append(
@@ -319,22 +312,11 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                                 append(sessionInfo.captureDeviceName)
                             }
                         },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (sessionInfo.pcAudioCaptureReceiving) Color(0xFF81c995) else Color(0xFFf0883e),
-                    )
-                    if (!audioDebug.captureLastError.isNullOrBlank()) {
-                        Text(
-                            "Último erro do Windows: ${audioDebug.captureLastError}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFFf85149),
-                        )
-                    }
-                    Text(
-                        "Resumo técnico: último áudio ${audioDebug.captureLastGoodMsAgo ?: -1} ms · destinos UDP ${audioDebug.udpTargetCount} · conexões WS ${audioDebug.wsClientCount}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFF8b949e),
-                    )
-                }
+                    captureOk = sessionInfo.pcAudioCaptureReceiving,
+                    lastError = audioDebug.captureLastError,
+                    diagText = "Resumo técnico: último áudio ${audioDebug.captureLastGoodMsAgo ?: -1} ms · destinos UDP ${audioDebug.udpTargetCount} · conexões WS ${audioDebug.wsClientCount}",
+                    onDismiss = { showRetornoStatus = false },
+                )
             }
             MasterDeskControl(value = master, onSet = { master = it; vm.setMasterGain(it) })
 
@@ -538,6 +520,82 @@ private fun MixerStripCard(
                         Text("EQ\nLOCK", style = MaterialTheme.typography.labelSmall, color = Color(0xFF8b949e))
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReturnStatusDialog(
+    latencyText: String,
+    transportText: String,
+    signalText: String,
+    signalOk: Boolean,
+    captureText: String,
+    captureOk: Boolean,
+    lastError: String?,
+    diagText: String,
+    onDismiss: () -> Unit,
+) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF111925)),
+        ) {
+            Column(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .background(CardBg)
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "Como está seu retorno",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = Color(0xFFe8eaed),
+                    )
+                    TextButton(onClick = onDismiss) {
+                        Text("Fechar")
+                    }
+                }
+                Text(
+                    latencyText,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color(0xFFdbe6f3),
+                )
+                Text(
+                    transportText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF9ab8d8),
+                )
+                Text(
+                    signalText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (signalOk) Color(0xFF81c995) else Color(0xFFf0883e),
+                )
+                Text(
+                    captureText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (captureOk) Color(0xFF81c995) else Color(0xFFf0883e),
+                )
+                if (!lastError.isNullOrBlank()) {
+                    Text(
+                        "Último erro do Windows: $lastError",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFFf85149),
+                    )
+                }
+                Text(
+                    diagText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF8b949e),
+                )
             }
         }
     }
