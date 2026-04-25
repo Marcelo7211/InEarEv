@@ -69,6 +69,9 @@ type PcAudioStatus = {
   captureAvfoundationAudioIndex?: number | null
   captureAvfoundationMode?: 'auto' | 'manual' | 'off'
   captureAvfoundationAutoPicked?: boolean
+  winDshowCaptureMode?: 'single' | 'aggregate'
+  winDshowAggregateInputCount?: number
+  winDshowAggregateActive?: boolean
 }
 
 type CaptureAssignMode = 'sum' | 'L' | 'R'
@@ -113,6 +116,10 @@ type AudioCaptureDevicesRes = {
   captureChannelCountAuto: boolean
   captureInputMatrix: CaptureInputMatrix
   mixerChannels: { id: string; name: string; captureInputIndex?: number }[]
+  winDshowCaptureMode?: 'single' | 'aggregate'
+  winDshowAggregateInputs?: { name: string }[]
+  winDshowAggregateActive?: boolean
+  aggregateTotalChannels?: number | null
 }
 
 type AudioInputLevelsRes = {
@@ -139,6 +146,9 @@ async function loadPcAudioStatus(
       captureAvfoundationAudioIndex?: number | null
       captureAvfoundationMode?: 'auto' | 'manual' | 'off'
       captureAvfoundationAutoPicked?: boolean
+      winDshowCaptureMode?: 'single' | 'aggregate'
+      winDshowAggregateInputCount?: number
+      winDshowAggregateActive?: boolean
     }
     return {
       configured: Boolean(j.pcAudioCaptureConfigured),
@@ -147,6 +157,9 @@ async function loadPcAudioStatus(
       captureAvfoundationAudioIndex: j.captureAvfoundationAudioIndex ?? null,
       captureAvfoundationMode: j.captureAvfoundationMode,
       captureAvfoundationAutoPicked: Boolean(j.captureAvfoundationAutoPicked),
+      winDshowCaptureMode: j.winDshowCaptureMode,
+      winDshowAggregateInputCount: j.winDshowAggregateInputCount,
+      winDshowAggregateActive: j.winDshowAggregateActive,
     }
   } catch {
     return null

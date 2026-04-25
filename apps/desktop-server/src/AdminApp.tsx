@@ -1682,6 +1682,10 @@ type AudioCaptureDevicesRes = {
   captureChannelCountAuto: boolean
   captureInputMatrix: CaptureInputMatrix
   mixerChannels: { id: string; name: string; captureInputIndex?: number }[]
+  winDshowCaptureMode?: 'single' | 'aggregate'
+  winDshowAggregateInputs?: { name: string }[]
+  winDshowAggregateActive?: boolean
+  aggregateTotalChannels?: number | null
 }
 
 type AudioDebugResponse = {
@@ -1735,6 +1739,8 @@ function MacAudioInputsPanel({
   const [gainByIndex, setGainByIndex] = useState<Record<string, number>>({})
   const [channelCountAuto, setChannelCountAuto] = useState(true)
   const [audioDebug, setAudioDebug] = useState<AudioDebugResponse | null>(null)
+  const [winCapMode, setWinCapMode] = useState<'single' | 'aggregate'>('single')
+  const [aggOrder, setAggOrder] = useState<string[]>([])
   const compactBtnStyle: CSSProperties = {
     padding: '6px 10px',
     minHeight: 30,
@@ -1822,6 +1828,14 @@ function MacAudioInputsPanel({
           token,
         })
         setData(j)
+        if (j.platform === 'win32') {
+          setWinCapMode(j.winDshowCaptureMode === 'aggregate' ? 'aggregate' : 'single')
+          setAggOrder(
+            (j.winDshowAggregateInputs || [])
+              .map((x) => String(x?.name || '').trim())
+              .filter(Boolean),
+          )
+        }
         const m = j.captureMode
         if (m === 'manual' && j.manualAvfoundationAudioIndex != null) {
           setSelectVal(String(j.manualAvfoundationAudioIndex))
@@ -1874,7 +1888,7 @@ function MacAudioInputsPanel({
   }, [load, onError])
 
   async function applySelection(mode: 'save' | 'clear') {
-    if (!canEdit) return
+    if (!canEdit || !data) return
     setBusy(true)
     onError(null)
     try {
@@ -1888,11 +1902,13 @@ function MacAudioInputsPanel({
         await load(true)
         return
       }
+      const winSingle =
+        data.platform === 'win32' ? ({ winDshowCaptureMode: 'single' as const } as const) : {}
       if (selectVal === SEL_AUTO) {
         await api('/api/audio-capture-device', {
           method: 'PATCH',
           token,
-          body: JSON.stringify({ captureAvfoundationMode: 'auto' }),
+          body: JSON.stringify({ captureAvfoundationMode: 'auto', ...winSingle }),
         })
       } else if (selectVal === SEL_OFF) {
         await api('/api/audio-capture-device', {
@@ -1912,6 +1928,7 @@ function MacAudioInputsPanel({
           body: JSON.stringify({
             captureAvfoundationMode: 'manual',
             avfoundationAudioIndex: n,
+            ...winSingle,
           }),
         })
       }
@@ -1946,6 +1963,37 @@ function MacAudioInputsPanel({
         }),
       })
       await load()
+    } catch (e) {
+      onError(String((e as Error).message))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function applyWinAggregate() {
+    if (!canEdit || !data || data.platform !== 'win32') return
+    if (aggOrder.length < 2) {
+      onError('Selecciona e ordena pelo menos duas entradas DirectShow para o agregado.')
+      return
+    }
+    setBusy(true)
+    onError(null)
+    try {
+      const capMode = data.captureMode === 'off' ? 'auto' : data.captureMode
+      const body: Record<string, unknown> = {
+        winDshowCaptureMode: 'aggregate',
+        winDshowAggregateInputs: aggOrder.map((name) => ({ name })),
+        captureAvfoundationMode: capMode,
+      }
+      if (capMode === 'manual' && data.manualAvfoundationAudioIndex != null) {
+        body.avfoundationAudioIndex = data.manualAvfoundationAudioIndex
+      }
+      await api('/api/audio-capture-device', {
+        method: 'PATCH',
+        token,
+        body: JSON.stringify(body),
+      })
+      await load(true, true)
     } catch (e) {
       onError(String((e as Error).message))
     } finally {
@@ -2333,6 +2381,109 @@ function MacAudioInputsPanel({
           ) : null}
         </div>
       ) : null}
+      {data.platform === 'win32' && data.captureSource !== 'env' && canEdit ? (
+        <div
+          style={{
+            marginTop: 16,
+            padding: 14,
+            borderRadius: 12,
+            border: '1px solid #334861',
+            background: '#0f1722',
+            maxWidth: 920,
+          }}
+        >
+          <h3 style={{ fontSize: 15, marginTop: 0, marginBottom: 10, color: '#58a6ff' }}>
+            Modo Windows (DirectShow)
+          </h3>
+          <p style={{ color: '#9aa0a6', fontSize: 13, lineHeight: 1.5, marginBottom: 12 }}>
+            <strong>Um dispositivo:</strong> igual ao comportamento clássico (uma entrada, N canais).
+            <strong> Várias entradas:</strong> funde vários micros DirectShow num único fluxo PCM (ex. Ui24R em
+            vários pares). A <strong>ordem</strong> na lista abaixo define os índices 0…N-1 para{' '}
+            <code>captureInputIndex</code> na mesa.
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginBottom: 12 }}>
+            <label style={{ color: '#e8eaed', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <input
+                type="radio"
+                name="winCapMode"
+                checked={winCapMode === 'single'}
+                onChange={() => setWinCapMode('single')}
+              />
+              Um dispositivo
+            </label>
+            <label style={{ color: '#e8eaed', display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <input
+                type="radio"
+                name="winCapMode"
+                checked={winCapMode === 'aggregate'}
+                onChange={() => setWinCapMode('aggregate')}
+              />
+              Várias entradas (agregado)
+            </label>
+          </div>
+          {winCapMode === 'aggregate' ? (
+            <div style={{ marginTop: 8 }}>
+              <p style={{ color: '#c9d1d9', fontSize: 13, marginBottom: 8 }}>
+                Marque as linhas na tabela <strong>Entradas encontradas</strong> (coluna Agregado). Depois ajuste a
+                ordem e clique <strong>Aplicar agregado</strong> (mínimo 2 entradas).
+              </p>
+              {aggOrder.length > 0 ? (
+                <ol style={{ color: '#e8eaed', fontSize: 13, paddingLeft: 20, marginBottom: 10 }}>
+                  {aggOrder.map((nm, i) => (
+                    <li key={`${nm}-${i}`} style={{ marginBottom: 6 }}>
+                      <code style={{ color: '#79c0ff' }}>{nm}</code>
+                      <span style={{ marginLeft: 8 }}>
+                        <button
+                          type="button"
+                          style={compactBtnStyle}
+                          disabled={busy || i === 0}
+                          onClick={() =>
+                            setAggOrder((prev) => {
+                              const next = [...prev]
+                              const t = next[i - 1]
+                              next[i - 1] = next[i]
+                              next[i] = t
+                              return next
+                            })
+                          }
+                        >
+                          Subir
+                        </button>
+                        <button
+                          type="button"
+                          style={{ ...compactBtnStyle, marginLeft: 6 }}
+                          disabled={busy || i >= aggOrder.length - 1}
+                          onClick={() =>
+                            setAggOrder((prev) => {
+                              const next = [...prev]
+                              const t = next[i]
+                              next[i] = next[i + 1]
+                              next[i + 1] = t
+                              return next
+                            })
+                          }
+                        >
+                          Descer
+                        </button>
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p style={{ color: '#6e7681', fontSize: 13 }}>Nenhuma entrada seleccionada ainda.</p>
+              )}
+              <button
+                type="button"
+                style={{ ...compactBtnStyle, background: '#1f6feb', borderColor: '#388bfd' }}
+                disabled={busy || aggOrder.length < 2}
+                onClick={() => void applyWinAggregate()}
+              >
+                Aplicar agregado
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {data.devices.length > 0 ? (
         <div style={{ marginTop: 16 }}>
           <h3 style={{ fontSize: 15, marginBottom: 8 }}>
@@ -2388,6 +2539,11 @@ function MacAudioInputsPanel({
                   <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #394457' }}>
                     Canais
                   </th>
+                  {data.platform === 'win32' ? (
+                    <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #394457' }}>
+                      Agregado
+                    </th>
+                  ) : null}
                   <th style={{ textAlign: 'left', padding: '10px 12px', borderBottom: '1px solid #394457' }}>
                     Observação
                   </th>
@@ -2404,6 +2560,8 @@ function MacAudioInputsPanel({
                       : err
                         ? err
                         : 'Ainda não foi medido. Use "Provar todos" se quiser conferir.'
+                  const aggColSpan = data.platform === 'win32' ? 6 : 5
+                  const inAgg = aggOrder.includes(d.name)
                   return (
                     <Fragment key={d.index}>
                       <tr style={{ borderBottom: '1px solid #30363d' }}>
@@ -2427,6 +2585,30 @@ function MacAudioInputsPanel({
                         >
                           {n != null ? n : '—'}
                         </td>
+                        {data.platform === 'win32' ? (
+                          <td style={{ padding: '8px 12px', verticalAlign: 'top' }}>
+                            <input
+                              type="checkbox"
+                              checked={inAgg}
+                              disabled={winCapMode !== 'aggregate'}
+                              title={
+                                winCapMode === 'aggregate'
+                                  ? 'Incluir no agregado (ordem = ordem da lista acima)'
+                                  : 'Escolhe "Várias entradas (agregado)" para marcar'
+                              }
+                              onChange={(e) => {
+                                const on = e.target.checked
+                                setAggOrder((prev) => {
+                                  if (on) {
+                                    if (prev.includes(d.name)) return prev
+                                    return [...prev, d.name]
+                                  }
+                                  return prev.filter((x) => x !== d.name)
+                                })
+                              }}
+                            />
+                          </td>
+                        ) : null}
                         <td
                           style={{
                             padding: '8px 12px',
@@ -2441,7 +2623,7 @@ function MacAudioInputsPanel({
                       </tr>
                       {d.dshowOptionsTail ? (
                         <tr style={{ borderBottom: '1px solid #30363d' }}>
-                          <td colSpan={5} style={{ padding: '0 12px 10px 48px', background: '#0d1117' }}>
+                          <td colSpan={aggColSpan} style={{ padding: '0 12px 10px 48px', background: '#0d1117' }}>
                             <details>
                               <summary style={{ cursor: 'pointer', color: '#79c0ff', fontSize: 12 }}>
                                 DirectShow: opções / pins (últimas linhas)
@@ -2496,6 +2678,12 @@ function MacAudioInputsPanel({
             <span style={{ color: '#dbe6f3', fontWeight: 700 }}>Entrada que será usada</span>
             <select
               value={selectVal}
+              disabled={data.platform === 'win32' && winCapMode === 'aggregate'}
+              title={
+                data.platform === 'win32' && winCapMode === 'aggregate'
+                  ? 'Em modo agregado usa "Aplicar agregado" acima; escolhe "Um dispositivo" para voltar aqui.'
+                  : undefined
+              }
               onChange={(e) => setSelectVal(e.target.value)}
               style={{
                 minWidth: 220,
@@ -2506,6 +2694,7 @@ function MacAudioInputsPanel({
                 borderRadius: 6,
                 width: '100%',
                 maxWidth: 520,
+                opacity: data.platform === 'win32' && winCapMode === 'aggregate' ? 0.55 : 1,
               }}
             >
               <option value={SEL_AUTO}>— escolher automaticamente —</option>

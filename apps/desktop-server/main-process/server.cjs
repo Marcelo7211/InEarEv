@@ -649,6 +649,108 @@ function dshowAudioInputSpecifier(deviceName) {
 }
 
 /**
+ * Valida lista ordenada de entradas DirectShow para captura agregada (Windows).
+ * @param {{ name: string }[]} listedDevices
+ * @param {string[]} namesOrdered
+ * @returns
+ *   | { ok: true, names: string[], channelsEach: number[], total: number }
+ *   | { ok: false, error: string, message?: string, name?: string }
+ */
+function validateWin32AggregateInputs(listedDevices, namesOrdered) {
+  const listed = new Set((listedDevices || []).map((d) => String(d.name || '').trim()).filter(Boolean))
+  const names = (namesOrdered || []).map((n) => String(n || '').trim()).filter(Boolean)
+  if (names.length < 2) {
+    return {
+      ok: false,
+      error: 'aggregate_min_two',
+      message: 'Modo agregado exige pelo menos duas entradas DirectShow na lista ordenada.',
+    }
+  }
+  const channelsEach = /** @type {number[]} */ ([])
+  let total = 0
+  for (const name of names) {
+    if (!listed.has(name)) {
+      return {
+        ok: false,
+        error: 'aggregate_unknown_device',
+        message: `Dispositivo não encontrado na lista DirectShow: ${name}`,
+        name,
+      }
+    }
+    const pr = probeDshowInputChannelsResult(name, {})
+    const c = pr.channels
+    if (!Number.isFinite(c) || c < 1) {
+      return {
+        ok: false,
+        error: 'aggregate_probe_failed',
+        message: pr.error || `Não foi possível confirmar os canais de: ${name}`,
+        name,
+      }
+    }
+    if (total + c > MVP_MAX_CAPTURE_CHANNELS) {
+      return {
+        ok: false,
+        error: 'aggregate_too_many_channels',
+        message: `Soma dos canais (${total + c}) excede o limite de ${MVP_MAX_CAPTURE_CHANNELS}.`,
+      }
+    }
+    channelsEach.push(c)
+    total += c
+  }
+  return { ok: true, names, channelsEach, total }
+}
+
+/**
+ * ffmpeg: vários `-f dshow -i` + `amerge` → stdout s16le intercalado.
+ * @param {{
+ *   deviceNames: string[]
+ *   dshowAudioBufferMs: number
+ *   audioPinName: string
+ *   audioDeviceNumber: number | null
+ * }} p
+ * @returns {string[]}
+ */
+function buildWin32DshowAggregateFfmpegArgs(p) {
+  const deviceNames = p.deviceNames || []
+  const dshowAudioBufferMs = p.dshowAudioBufferMs
+  const audioPinName = String(p.audioPinName || '').trim()
+  const audioDeviceNumber = p.audioDeviceNumber
+  const head = [
+    '-nostats',
+    '-loglevel',
+    'error',
+    '-fflags',
+    'nobuffer',
+    '-flags',
+    'low_delay',
+    '-rtbufsize',
+    '96k',
+    '-thread_queue_size',
+    '1024',
+  ]
+  const inputs = []
+  for (const devName of deviceNames) {
+    inputs.push(
+      '-f',
+      'dshow',
+      '-sample_rate',
+      String(MVP_SAMPLE_RATE_HZ),
+      '-audio_buffer_size',
+      String(dshowAudioBufferMs),
+      ...(audioPinName ? ['-audio_pin_name', audioPinName] : []),
+      ...(audioDeviceNumber !== null ? ['-audio_device_number', String(audioDeviceNumber)] : []),
+      '-i',
+      dshowAudioInputSpecifier(devName),
+    )
+  }
+  const nIn = deviceNames.length
+  const mergeIn = Array.from({ length: nIn }, (_, i) => `[${i}:a]`).join('')
+  const fc = `${mergeIn}amerge=inputs=${nIn}[mrg];[mrg]aformat=sample_fmts=s16:sample_rates=${MVP_SAMPLE_RATE_HZ}[out]`
+  const tail = ['-filter_complex', fc, '-map', '[out]', '-f', 's16le', '-']
+  return [...head, ...inputs, ...tail]
+}
+
+/**
  * @param {string} ffmpeg
  * @param {string} deviceName
  * @param {object} spawnOpts
@@ -1291,6 +1393,13 @@ function defaultState() {
     captureChannelCountAuto: true,
     /** Bloco PCM por tick do motor de áudio (64/128/256/512 amostras @ 48 kHz). */
     audioBlockSamples: process.platform === 'win32' ? 128 : 64,
+    /**
+     * Windows: `single` = um dispositivo DirectShow (comportamento clássico);
+     * `aggregate` = vários dispositivos fundidos num fluxo PCM (ex. Ui24R em vários endpoints).
+     */
+    winDshowCaptureMode: 'single',
+    /** Lista ordenada `{ name }` com nomes exactos da lista dshow. */
+    winDshowAggregateInputs: [],
   }
 }
 
@@ -1391,6 +1500,22 @@ function loadOrCreateState(userData) {
         raw.captureChannelCountAuto = true
       } else {
         raw.captureChannelCountAuto = Boolean(raw.captureChannelCountAuto)
+      }
+      if (raw.winDshowCaptureMode !== 'aggregate' && raw.winDshowCaptureMode !== 'single') {
+        raw.winDshowCaptureMode = 'single'
+      }
+      if (!Array.isArray(raw.winDshowAggregateInputs)) {
+        raw.winDshowAggregateInputs = []
+      } else {
+        raw.winDshowAggregateInputs = raw.winDshowAggregateInputs
+          .map((x) =>
+            typeof x === 'string'
+              ? { name: String(x).trim() }
+              : x && typeof x.name === 'string'
+                ? { name: String(x.name).trim() }
+                : null,
+          )
+          .filter((x) => x && x.name)
       }
       if (raw.audioBlockSamples === undefined || raw.audioBlockSamples === null) {
         raw.audioBlockSamples = process.platform === 'win32' ? 128 : 64
@@ -2173,6 +2298,29 @@ function createServices(app) {
     }
     if (process.platform === 'win32') {
       const mode = state.captureAvfoundationMode || 'auto'
+      const aggOn =
+        (state.winDshowCaptureMode || 'single') === 'aggregate' &&
+        Array.isArray(state.winDshowAggregateInputs) &&
+        state.winDshowAggregateInputs.length >= 2 &&
+        mode !== 'off'
+      if (aggOn) {
+        const names = state.winDshowAggregateInputs
+          .map((x) => String(x?.name || '').trim())
+          .filter(Boolean)
+        const v = validateWin32AggregateInputs(devices, names)
+        if (v.ok) {
+          return {
+            captureSource: 'dshow',
+            effectiveIndex: null,
+            effectiveName: `DirectShow (${v.total} canais, ${v.names.length} entradas)`,
+            autoPicked: false,
+            mode,
+            dshowAggregateActive: true,
+            aggregateTotalChannels: v.total,
+            aggregateInputCount: v.names.length,
+          }
+        }
+      }
       const eff = resolveEffectiveAvfoundationIndex(devices)
       const name =
         eff != null ? devices.find((d) => d.index === eff)?.name ?? null : null
@@ -2183,6 +2331,9 @@ function createServices(app) {
         effectiveName: name,
         autoPicked,
         mode,
+        dshowAggregateActive: false,
+        aggregateTotalChannels: null,
+        aggregateInputCount: null,
       }
     }
     return {
@@ -2376,6 +2527,75 @@ function createServices(app) {
       bustPcCaptureCaches()
       const devices = listDshowAudioDevices()
       pcCaptureDevicesCache = { list: devices, at: Date.now() }
+      const captureMode = state.captureAvfoundationMode || 'auto'
+      const wantAgg =
+        (state.winDshowCaptureMode || 'single') === 'aggregate' && captureMode !== 'off'
+      const aggNames = (Array.isArray(state.winDshowAggregateInputs) ? state.winDshowAggregateInputs : [])
+        .map((x) => String(x?.name || '').trim())
+        .filter(Boolean)
+      if (wantAgg) {
+        const aggVal = validateWin32AggregateInputs(devices, aggNames)
+        const ffmpeg = findFfmpegExecutable()
+        if (!aggVal.ok) {
+          console.error('[inear] DirectShow agregado: configuração inválida.', aggVal)
+        } else if (!ffmpeg) {
+          console.error(
+            '[inear] captura DirectShow agregada: ffmpeg não encontrado (PATH ou INEAR_FFMPEG).',
+          )
+        } else {
+          if (aggVal.total !== normalizeCaptureChannelCount()) {
+            state.captureChannelCount = aggVal.total
+            saveState(userData, state)
+          }
+          const nCh = normalizeCaptureChannelCount()
+          autoSyncInterfaceChannelsIfNeeded(
+            `Agregado DirectShow (${aggVal.names.length} entradas)`,
+            nCh,
+          )
+          const audioPinName = String(process.env.INEAR_DSHOW_AUDIO_PIN_NAME || '').trim()
+          const audioDeviceNumberRaw = String(process.env.INEAR_DSHOW_AUDIO_DEVICE_NUMBER || '').trim()
+          const audioDeviceNumber = Number.isFinite(Number(audioDeviceNumberRaw))
+            ? Math.max(0, Math.floor(Number(audioDeviceNumberRaw)))
+            : null
+          const dshowAudioBufferMsRaw = Number(
+            String(process.env.INEAR_DSHOW_AUDIO_BUFFER_MS || '').trim() || '5',
+          )
+          const dshowAudioBufferMs =
+            Number.isFinite(dshowAudioBufferMsRaw) && dshowAudioBufferMsRaw >= 0
+              ? Math.max(0, Math.min(500, Math.floor(dshowAudioBufferMsRaw)))
+              : 20
+          const aggArgs = buildWin32DshowAggregateFfmpegArgs({
+            deviceNames: aggVal.names,
+            dshowAudioBufferMs,
+            audioPinName,
+            audioDeviceNumber,
+          })
+          const mode = captureMode
+          const label = `agregado:${aggVal.names.length}x (${nCh}ch)`
+          console.info(
+            `[inear] captura do PC (DirectShow agregado ${mode}, ${aggVal.names.length} entradas, ${nCh}ch, audio_buffer_size=${dshowAudioBufferMs}ms)`,
+            ffmpeg,
+          )
+          captureChild = spawn(ffmpeg, aggArgs, {
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: augmentPathForFfmpeg(process.env),
+            windowsHide: true,
+            cwd: path.dirname(ffmpeg),
+          })
+          attachCaptureProcessDiagnostics(captureChild, {
+            captureKind: 'dshow_aggregate',
+            captureDeviceName: label,
+            captureDeviceIndex: null,
+            ffmpegPath: ffmpeg,
+          })
+          captureChild.stdout.on('data', pushCaptureChunk)
+          return
+        }
+      }
+      /* Pedido agregado: não cair para um único dispositivo se a configuração falhar. */
+      if (wantAgg) {
+        return
+      }
       const n = resolveEffectiveAvfoundationIndex(devices)
       if (n != null) {
         const ffmpeg = findFfmpegExecutable()
@@ -2730,6 +2950,11 @@ function createServices(app) {
       captureDeviceName: meta.effectiveName || null,
       captureLastError: captureDebugState.lastError,
       captureLastGoodMsAgo: lastGoodCaptureMs ? Math.max(0, Date.now() - lastGoodCaptureMs) : null,
+      winDshowCaptureMode: state.winDshowCaptureMode || 'single',
+      winDshowAggregateInputCount: Array.isArray(state.winDshowAggregateInputs)
+        ? state.winDshowAggregateInputs.length
+        : 0,
+      winDshowAggregateActive: Boolean(meta.dshowAggregateActive),
     })
   })
   ex.get('/api/audio-debug', authMiddleware, (_req, res) => {
@@ -2860,10 +3085,21 @@ function createServices(app) {
           }),
         )
       } else {
+        const aggNameSet =
+          process.platform === 'win32' &&
+          (state.winDshowCaptureMode || 'single') === 'aggregate' &&
+          Array.isArray(state.winDshowAggregateInputs)
+            ? new Set(
+                state.winDshowAggregateInputs
+                  .map((x) => String(x?.name || '').trim())
+                  .filter(Boolean),
+              )
+            : null
         devicesWithInputs = devices.map((d) => {
           const shouldProbe =
             d.index === meta.effectiveIndex ||
-            (suggestion && d.index === suggestion.index)
+            (suggestion && d.index === suggestion.index) ||
+            (aggNameSet && aggNameSet.has(d.name))
           let inputChannels = null
           let probeError = null
           if (shouldProbe) {
@@ -2892,8 +3128,12 @@ function createServices(app) {
       let effectiveProbeError = null
       const activeNativeCapture =
         (meta.captureSource === 'avfoundation' || meta.captureSource === 'dshow') &&
-        meta.effectiveIndex != null
-      if (activeNativeCapture) {
+        (meta.effectiveIndex != null || Boolean(meta.dshowAggregateActive))
+      if (activeNativeCapture && meta.dshowAggregateActive) {
+        effectiveProbedInputChannels =
+          typeof meta.aggregateTotalChannels === 'number' ? meta.aggregateTotalChannels : null
+        effectiveProbeError = null
+      } else if (activeNativeCapture) {
         if (probeAll) {
           const row = devicesWithInputs.find((x) => x.index === meta.effectiveIndex)
           if (row) {
@@ -2957,6 +3197,13 @@ function createServices(app) {
           name: c.name,
           captureInputIndex: c.captureInputIndex,
         })),
+        winDshowCaptureMode: state.winDshowCaptureMode || 'single',
+        winDshowAggregateInputs: Array.isArray(state.winDshowAggregateInputs)
+          ? state.winDshowAggregateInputs
+          : [],
+        winDshowAggregateActive: Boolean(meta.dshowAggregateActive),
+        aggregateTotalChannels:
+          typeof meta.aggregateTotalChannels === 'number' ? meta.aggregateTotalChannels : null,
       })
     } catch (e) {
       console.error('[inear] GET /api/audio-capture-devices', e)
@@ -3047,32 +3294,85 @@ function createServices(app) {
       })
     }
     const body = req.body || {}
-    let mode = body.captureAvfoundationMode
-    const idxBody = body.avfoundationAudioIndex
-    if (mode == null || mode === '') {
+    const patchOnlyAggregate =
+      process.platform === 'win32' &&
+      body.captureAvfoundationMode == null &&
+      (body.avfoundationAudioIndex === undefined || body.avfoundationAudioIndex === '') &&
+      (body.winDshowCaptureMode != null || body.winDshowAggregateInputs != null)
+
+    if (process.platform === 'win32') {
       if (
-        idxBody === null ||
-        idxBody === undefined ||
-        idxBody === ''
+        typeof body.winDshowCaptureMode === 'string' &&
+        ['single', 'aggregate'].includes(body.winDshowCaptureMode)
       ) {
-        mode = 'off'
+        state.winDshowCaptureMode = body.winDshowCaptureMode
+      }
+      if (Array.isArray(body.winDshowAggregateInputs)) {
+        state.winDshowAggregateInputs = body.winDshowAggregateInputs
+          .map((x) =>
+            typeof x === 'string'
+              ? { name: String(x).trim() }
+              : x && typeof x.name === 'string'
+                ? { name: String(x.name).trim() }
+                : null,
+          )
+          .filter((x) => x && x.name)
+      }
+      if ((state.winDshowCaptureMode || 'single') === 'aggregate') {
+        const devices = listDshowAudioDevices()
+        const names = (state.winDshowAggregateInputs || [])
+          .map((x) => String(x?.name || '').trim())
+          .filter(Boolean)
+        const v = validateWin32AggregateInputs(devices, names)
+        if (!v.ok) {
+          return res.status(400).json({
+            error: v.error,
+            message: v.message || 'Agregado DirectShow inválido.',
+            name: v.name,
+          })
+        }
+        state.captureChannelCount = v.total
+        state.captureChannelCountAuto = false
+      }
+    }
+
+    if (!patchOnlyAggregate) {
+      let mode = body.captureAvfoundationMode
+      const idxBody = body.avfoundationAudioIndex
+      if (mode == null || mode === '') {
+        if (
+          idxBody === null ||
+          idxBody === undefined ||
+          idxBody === ''
+        ) {
+          mode = 'off'
+        } else {
+          mode = 'manual'
+        }
+      }
+      if (!['auto', 'manual', 'off'].includes(mode)) {
+        return res.status(400).json({ error: 'invalid_mode' })
+      }
+      state.captureAvfoundationMode = mode
+      if (mode === 'manual') {
+        const num = Number(idxBody)
+        if (!Number.isInteger(num) || num < 0) {
+          return res.status(400).json({ error: 'invalid_index' })
+        }
+        state.captureAvfoundationAudioIndex = num
       } else {
-        mode = 'manual'
+        state.captureAvfoundationAudioIndex = null
+      }
+      if (
+        process.platform === 'win32' &&
+        body.winDshowCaptureMode == null &&
+        body.captureAvfoundationMode != null &&
+        body.captureAvfoundationMode !== 'off'
+      ) {
+        state.winDshowCaptureMode = 'single'
       }
     }
-    if (!['auto', 'manual', 'off'].includes(mode)) {
-      return res.status(400).json({ error: 'invalid_mode' })
-    }
-    state.captureAvfoundationMode = mode
-    if (mode === 'manual') {
-      const num = Number(idxBody)
-      if (!Number.isInteger(num) || num < 0) {
-        return res.status(400).json({ error: 'invalid_index' })
-      }
-      state.captureAvfoundationAudioIndex = num
-    } else {
-      state.captureAvfoundationAudioIndex = null
-    }
+
     bustPcCaptureCaches()
     saveState(userData, state)
     startCaptureIfConfigured()
@@ -3080,6 +3380,10 @@ function createServices(app) {
       ok: true,
       captureAvfoundationMode: state.captureAvfoundationMode,
       captureAvfoundationAudioIndex: state.captureAvfoundationAudioIndex,
+      winDshowCaptureMode: state.winDshowCaptureMode || 'single',
+      winDshowAggregateInputs: Array.isArray(state.winDshowAggregateInputs)
+        ? state.winDshowAggregateInputs
+        : [],
     })
   })
   ex.post('/api/auth/login', loginLimiter, (req, res) => {
