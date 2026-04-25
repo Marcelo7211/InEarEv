@@ -45,10 +45,6 @@ const HTTP_PORT = 3847
 const UDP_AUDIO_PORT = 9876
 const UDP_CONTROL_PORT = 9877
 
-/** Desenvolvimento / primeira execução: utilizador `admin` com senha `admin123` (bcrypt cost 10). */
-const DEFAULT_DEV_ADMIN_BCRYPT =
-  '$2a$10$zkUmrcTtnuJ1ZkZSEegAFeq2eyA9ARmDcpLOiHszZ8hgD7KusfEoy'
-
 /**
  * Binários empacotados pelo electron-builder (extraResources → resources/ffmpeg-win/).
  * Em dev, usa apps/desktop-server/resources/ffmpeg-win/.
@@ -1184,76 +1180,6 @@ function statePath(userData) {
   return path.join(userData, 'inear-state.json')
 }
 
-function userNameKey(u) {
-  return String((u && u.username) || '')
-    .trim()
-    .toLowerCase()
-}
-
-/**
- * Garante um administrador por defeito quando o estado não tem nenhum (ex.: ficheiros antigos com `users: []`).
- * @param {*} raw estado carregado de `inear-state.json`
- * @returns {boolean} true se o estado foi alterado e deve ser gravado
- */
-function ensureDefaultAdminUser(raw) {
-  if (!Array.isArray(raw.users)) raw.users = []
-  if (raw.users.some((u) => u && u.role === 'admin')) return false
-  if (raw.users.some((u) => u && userNameKey(u) === 'admin')) return false
-  raw.users.push({
-    username: 'admin',
-    passwordHash: DEFAULT_DEV_ADMIN_BCRYPT,
-    role: 'admin',
-  })
-  return true
-}
-
-/**
- * Se já existe admin com outro nome (wizard), acrescenta a conta documentada `admin` / `admin123`.
- * @param {*} raw
- * @returns {boolean}
- */
-function ensureBuiltinAdminLoginExists(raw) {
-  if (!Array.isArray(raw.users)) raw.users = []
-  if (raw.users.some((u) => u && userNameKey(u) === 'admin')) return false
-  raw.users.push({
-    username: 'admin',
-    passwordHash: DEFAULT_DEV_ADMIN_BCRYPT,
-    role: 'admin',
-  })
-  return true
-}
-
-/**
- * Garante que o utilizador `admin` (qualquer capitalização) tem sempre a senha `admin123`.
- * @param {*} raw
- * @returns {boolean}
- */
-function normalizeBuiltinAdminPassword(raw) {
-  const bcrypt = require('bcryptjs')
-  if (!Array.isArray(raw.users)) raw.users = []
-  const u = raw.users.find((x) => x && x.role === 'admin' && userNameKey(x) === 'admin')
-  if (!u) return false
-  let changed = false
-  if (u.username !== 'admin') {
-    u.username = 'admin'
-    changed = true
-  }
-  let ok = false
-  try {
-    ok =
-      typeof u.passwordHash === 'string' &&
-      u.passwordHash.length >= 20 &&
-      bcrypt.compareSync('admin123', u.passwordHash)
-  } catch {
-    ok = false
-  }
-  if (!ok) {
-    u.passwordHash = DEFAULT_DEV_ADMIN_BCRYPT
-    changed = true
-  }
-  return changed
-}
-
 function defaultState() {
   const showfile = migrateShowfile(defaultShowfile())
   // Primeira execução: instalação "limpa". Admin será criado no wizard inicial.
@@ -1262,13 +1188,8 @@ function defaultState() {
     showfile,
     jwtSecret: crypto.randomBytes(32).toString('hex'),
     pairing: null,
-    users: [
-      {
-        username: 'admin',
-        passwordHash: DEFAULT_DEV_ADMIN_BCRYPT,
-        role: 'admin',
-      },
-    ],
+    /** Primeira execução: o admin é criado em `/api/setup/bootstrap` (painel "Criar Admin"). */
+    users: [],
     /** macOS: índice AVFoundation só-áudio (`none:N` no ffmpeg); usado só em modo `manual`. */
     captureAvfoundationAudioIndex: null,
     /**
@@ -1402,9 +1323,6 @@ function loadOrCreateState(userData) {
         raw.audioBlockSamples = 128
         dirty = true
       }
-      if (ensureDefaultAdminUser(raw)) dirty = true
-      if (ensureBuiltinAdminLoginExists(raw)) dirty = true
-      if (normalizeBuiltinAdminPassword(raw)) dirty = true
       if (dirty) {
         fs.writeFileSync(p, JSON.stringify(raw, null, 2), 'utf8')
       }

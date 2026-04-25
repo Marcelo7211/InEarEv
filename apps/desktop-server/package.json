@@ -34,7 +34,8 @@
       "target": [
         "nsis",
         "portable"
-      ]
+      ],
+      "signAndEditExecutable": false
     },
     "mac": {
       "extendInfo": {

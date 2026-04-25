@@ -20,13 +20,7 @@ No **Windows**, após `npm install` corre um `postinstall` que tenta descarregar
 node scripts/download-ffmpeg-windows.cjs
 ```
 
-Credenciais padrão (primeira execução cria `inear-state.json` em `userData` do Electron):
-
-| Usuário     | Senha        | Papel     |
-|------------|--------------|-----------|
-| `admin`    | `admin123`   | admin     |
-| `musician1` | `musician1` | músico    |
-| `musician2` | `musician2` | músico    |
+Na **primeira execução**, o ficheiro `inear-state.json` (pasta `userData` do Electron) é criado **sem utilizadores**. O painel mostra **Criar Admin**: define utilizador e palavra-passe (mín. 6 caracteres) para o primeiro administrador. Contas de músicos são criadas depois no painel (admin).
 
 Portas fixas no MVP:
 
