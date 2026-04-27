@@ -2107,7 +2107,11 @@ function createServices(app) {
   }
 
   /** Captura estéreo s16le 48kHz: `INEAR_CAPTURE_CMD` ou AVFoundation (macOS). */
-  let captureBuf = Buffer.alloc(0)
+  let captureRing = Buffer.alloc(0)
+  let captureRingCap = 0
+  let captureRingW = 0
+  let captureRingR = 0
+  let captureRingFill = 0
   let captureChild = null
   let captureUnderruns = 0
   /** Última vez em que havia PCM suficiente do ffmpeg (para /api/session). */
@@ -2346,10 +2350,39 @@ function createServices(app) {
   }
 
   function pushCaptureChunk(chunk) {
-    captureBuf = Buffer.concat([captureBuf, chunk])
-    const capBytes = captureBufferSoftCapBytes(audioBlockSamples(), normalizeCaptureChannelCount())
-    if (captureBuf.length > capBytes) {
-      captureBuf = captureBuf.subarray(captureBuf.length - capBytes)
+    const nCh = normalizeCaptureChannelCount()
+    const capBytes = captureBufferSoftCapBytes(audioBlockSamples(), nCh)
+    if (!Number.isFinite(capBytes) || capBytes < 1) return
+    if (capBytes !== captureRingCap) {
+      captureRing = Buffer.allocUnsafe(capBytes)
+      captureRingCap = capBytes
+      captureRingW = 0
+      captureRingR = 0
+      captureRingFill = 0
+    }
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    if (buf.length <= 0) return
+    if (buf.length >= captureRingCap) {
+      const tail = buf.subarray(buf.length - captureRingCap)
+      tail.copy(captureRing, 0, 0, captureRingCap)
+      captureRingW = 0
+      captureRingR = 0
+      captureRingFill = captureRingCap
+    } else {
+      const overflow = Math.max(0, captureRingFill + buf.length - captureRingCap)
+      if (overflow > 0) {
+        captureRingR = (captureRingR + overflow) % captureRingCap
+        captureRingFill = captureRingCap - buf.length
+      }
+      let off = 0
+      while (off < buf.length) {
+        const spaceToEnd = captureRingCap - captureRingW
+        const n = Math.min(spaceToEnd, buf.length - off)
+        buf.copy(captureRing, captureRingW, off, off + n)
+        captureRingW = (captureRingW + n) % captureRingCap
+        off += n
+      }
+      captureRingFill = Math.min(captureRingCap, captureRingFill + buf.length)
     }
     captureDebugState.lastChunkAt = Date.now()
     captureDebugState.lastChunkBytes = chunk ? chunk.length : 0
@@ -2365,7 +2398,11 @@ function createServices(app) {
       }
     }
     captureChild = null
-    captureBuf = Buffer.alloc(0)
+    captureRing = Buffer.alloc(0)
+    captureRingCap = 0
+    captureRingW = 0
+    captureRingR = 0
+    captureRingFill = 0
     captureMeterState = { levelsByIndex: {}, updatedAt: Date.now() }
     resetCaptureDebugState()
   }
@@ -2557,8 +2594,9 @@ function createServices(app) {
           const audioDeviceNumber = Number.isFinite(Number(audioDeviceNumberRaw))
             ? Math.max(0, Math.floor(Number(audioDeviceNumberRaw)))
             : null
+          const defaultDshowAudioBufferMs = 20
           const dshowAudioBufferMsRaw = Number(
-            String(process.env.INEAR_DSHOW_AUDIO_BUFFER_MS || '').trim() || '5',
+            String(process.env.INEAR_DSHOW_AUDIO_BUFFER_MS || '').trim() || String(defaultDshowAudioBufferMs),
           )
           const dshowAudioBufferMs =
             Number.isFinite(dshowAudioBufferMsRaw) && dshowAudioBufferMsRaw >= 0
@@ -2629,8 +2667,9 @@ function createServices(app) {
             const audioDeviceNumber = Number.isFinite(Number(audioDeviceNumberRaw))
               ? Math.max(0, Math.floor(Number(audioDeviceNumberRaw)))
               : null
+            const defaultDshowAudioBufferMs = 10
             const dshowAudioBufferMsRaw = Number(
-              String(process.env.INEAR_DSHOW_AUDIO_BUFFER_MS || '').trim() || '5',
+              String(process.env.INEAR_DSHOW_AUDIO_BUFFER_MS || '').trim() || String(defaultDshowAudioBufferMs),
             )
             const dshowAudioBufferMs =
               Number.isFinite(dshowAudioBufferMsRaw) && dshowAudioBufferMsRaw >= 0
@@ -2706,18 +2745,24 @@ function createServices(app) {
   function takePcmBlock(blockSamples, nCh) {
     const need = blockSamples * nCh * 2
     const capBytes = captureBufferSoftCapBytes(blockSamples, nCh)
-    if (captureBuf.length > capBytes) {
-      captureBuf = captureBuf.subarray(captureBuf.length - capBytes)
+    if (capBytes !== captureRingCap) {
+      captureRing = Buffer.allocUnsafe(capBytes)
+      captureRingCap = capBytes
+      captureRingW = 0
+      captureRingR = 0
+      captureRingFill = 0
+      return null
     }
-    if (captureBuf.length < need) return null
-    const slice = captureBuf.subarray(0, need)
-    captureBuf = captureBuf.subarray(need)
-    if (slice.byteOffset % 2 !== 0) {
-      const copy = Buffer.allocUnsafe(need)
-      slice.copy(copy, 0, 0, need)
-      return new Int16Array(copy.buffer, 0, blockSamples * nCh)
+    if (captureRingFill < need) return null
+    const out = Buffer.allocUnsafe(need)
+    const first = Math.min(need, captureRingCap - captureRingR)
+    captureRing.copy(out, 0, captureRingR, captureRingR + first)
+    if (first < need) {
+      captureRing.copy(out, first, 0, need - first)
     }
-    return new Int16Array(slice.buffer, slice.byteOffset, blockSamples * nCh)
+    captureRingR = (captureRingR + need) % captureRingCap
+    captureRingFill = Math.max(0, captureRingFill - need)
+    return new Int16Array(out.buffer, out.byteOffset, blockSamples * nCh)
   }
 
   function gainForPhysicalInput(mx, idx, nCh) {
@@ -2985,7 +3030,7 @@ function createServices(app) {
       captureChildRunning: Boolean(captureChild && !captureChild.killed),
       captureChannelCount: normalizeCaptureChannelCount(),
       captureUnderruns,
-      captureBufferedBytes: captureBuf.length,
+      captureBufferedBytes: captureRingFill,
       captureLastGoodMsAgo: lastGoodCaptureMs ? Math.max(0, Date.now() - lastGoodCaptureMs) : null,
       captureLastChunkMsAgo: captureDebugState.lastChunkAt
         ? Math.max(0, Date.now() - captureDebugState.lastChunkAt)
@@ -3031,6 +3076,21 @@ function createServices(app) {
       receiving,
       levelsByIndex: captureMeterState.levelsByIndex || {},
     })
+  })
+  ex.get('/api/fx-levels', authMiddleware, (req, res) => {
+    if (req.user.role === 'admin') {
+      const byMusicianId = {}
+      for (const m of state.showfile.musicians) {
+        byMusicianId[m.id] = fxLevelsByMusician.get(m.id) || null
+      }
+      return res.json({ self: null, byMusicianId })
+    }
+    if (req.user.role === 'musician') {
+      const self = findMusicianByUsername(req.user.sub)
+      if (!self) return res.json({ self: null, byMusicianId: {} })
+      return res.json({ self: fxLevelsByMusician.get(self.id) || null, byMusicianId: {} })
+    }
+    return res.status(403).json({ error: 'forbidden' })
   })
   ex.get('/api/audio-capture-devices', authMiddleware, async (req, res) => {
     try {
@@ -3745,6 +3805,55 @@ function createServices(app) {
     return out
   }
 
+  function clampNumber(v, min, max, fallback) {
+    const n = Number(v)
+    if (!Number.isFinite(n)) return fallback
+    return Math.max(min, Math.min(max, n))
+  }
+
+  function sanitizePeqBand(raw) {
+    const type = String(raw?.type || '').trim()
+    if (!['hpf', 'lpf', 'bell', 'lowshelf', 'highshelf'].includes(type)) return null
+    return {
+      type,
+      enabled: Boolean(raw?.enabled !== false),
+      freqHz: clampNumber(raw?.freqHz, 20, 20000, 1000),
+      q: clampNumber(raw?.q, 0.1, 18, 1.0),
+      gainDb: clampNumber(raw?.gainDb, -24, 24, 0),
+    }
+  }
+
+  function sanitizePeqSettings(raw) {
+    const bandsRaw = Array.isArray(raw?.bands) ? raw.bands : []
+    const bands = bandsRaw.map(sanitizePeqBand).filter(Boolean).slice(0, 6)
+    return {
+      enabled: Boolean(raw?.enabled),
+      bands,
+    }
+  }
+
+  function sanitizePeqByChannel(partial) {
+    const out = {}
+    for (const [k, v] of Object.entries(partial || {})) {
+      const id = String(k || '').trim()
+      if (!id) continue
+      out[id] = sanitizePeqSettings(v)
+    }
+    return out
+  }
+
+  function sanitizeCompressorSettings(raw) {
+    return {
+      enabled: Boolean(raw?.enabled),
+      thresholdDb: clampNumber(raw?.thresholdDb, -60, 0, -12),
+      ratio: clampNumber(raw?.ratio, 1, 30, 3),
+      attackMs: clampNumber(raw?.attackMs, 0.1, 250, 12),
+      releaseMs: clampNumber(raw?.releaseMs, 5, 2000, 120),
+      kneeDb: clampNumber(raw?.kneeDb, 0, 24, 3),
+      makeupDb: clampNumber(raw?.makeupDb, -12, 24, 0),
+    }
+  }
+
   ex.patch('/api/showfile/musician/:id', authMiddleware, (req, res) => {
     const m = state.showfile.musicians.find((x) => x.id === req.params.id)
     if (!m) return res.status(404).json({ error: 'not_found' })
@@ -3763,6 +3872,15 @@ function createServices(app) {
       if (b.eqByChannel && typeof b.eqByChannel === 'object') {
         mergeMusicianEqByChannel(m, b.eqByChannel, true)
       }
+      if (b.peqByChannel && typeof b.peqByChannel === 'object') {
+        m.peqByChannel = { ...(m.peqByChannel || {}), ...sanitizePeqByChannel(b.peqByChannel) }
+      }
+      if (b.masterComp && typeof b.masterComp === 'object') {
+        m.masterComp = sanitizeCompressorSettings(b.masterComp)
+      }
+      if (b.masterEq && typeof b.masterEq === 'object') {
+        m.masterEq = sanitizePeqSettings(b.masterEq)
+      }
     } else if (req.user.role === 'musician') {
       const self = findMusicianByUsername(req.user.sub)
       if (!self || self.id !== m.id) {
@@ -3776,6 +3894,15 @@ function createServices(app) {
       if (typeof body.mute === 'boolean') m.mute = body.mute
       if (body.eqByChannel && typeof body.eqByChannel === 'object') {
         mergeMusicianEqByChannel(m, body.eqByChannel, false)
+      }
+      if (body.peqByChannel && typeof body.peqByChannel === 'object') {
+        m.peqByChannel = { ...(m.peqByChannel || {}), ...sanitizePeqByChannel(body.peqByChannel) }
+      }
+      if (body.masterComp && typeof body.masterComp === 'object') {
+        m.masterComp = sanitizeCompressorSettings(body.masterComp)
+      }
+      if (body.masterEq && typeof body.masterEq === 'object') {
+        m.masterEq = sanitizePeqSettings(body.masterEq)
       }
     } else {
       return res.status(403).json({ error: 'forbidden' })
@@ -4231,13 +4358,206 @@ function createServices(app) {
     }
   })
 
+  let captureMeterTick = 0
+  let audioTickCache = {
+    showfile: null,
+    chIds: [],
+    monoById: null,
+    chCaptureIdx: null,
+    chMode: null,
+    musiciansLen: 0,
+    musicianById: new Map(),
+  }
+
+  const fxRuntimeByMusician = new Map()
+  const fxLevelsByMusician = new Map()
+
+  function clampFxNumber(v, min, max, fallback) {
+    const n = Number(v)
+    if (!Number.isFinite(n)) return fallback
+    return Math.max(min, Math.min(max, n))
+  }
+
+  function biquadCoeffs(kind, freqHz, qOrSlope, gainDb, sampleRateHz) {
+    const f = clampFxNumber(freqHz, 20, 20000, 1000)
+    const sr = Math.max(8000, Number(sampleRateHz) || MVP_SAMPLE_RATE_HZ)
+    const w0 = (2 * Math.PI * f) / sr
+    const cosw = Math.cos(w0)
+    const sinw = Math.sin(w0)
+    const q = clampFxNumber(qOrSlope, 0.1, 18, 1.0)
+    const alpha = sinw / (2 * q)
+    const A = Math.pow(10, clampFxNumber(gainDb, -24, 24, 0) / 40)
+    const sqrtA = Math.sqrt(A)
+
+    if (kind === 'lpf') {
+      const b0 = (1 - cosw) / 2
+      const b1 = 1 - cosw
+      const b2 = (1 - cosw) / 2
+      const a0 = 1 + alpha
+      const a1 = -2 * cosw
+      const a2 = 1 - alpha
+      return { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 }
+    }
+    if (kind === 'hpf') {
+      const b0 = (1 + cosw) / 2
+      const b1 = -(1 + cosw)
+      const b2 = (1 + cosw) / 2
+      const a0 = 1 + alpha
+      const a1 = -2 * cosw
+      const a2 = 1 - alpha
+      return { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 }
+    }
+    if (kind === 'bell') {
+      const b0 = 1 + alpha * A
+      const b1 = -2 * cosw
+      const b2 = 1 - alpha * A
+      const a0 = 1 + alpha / A
+      const a1 = -2 * cosw
+      const a2 = 1 - alpha / A
+      return { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 }
+    }
+    if (kind === 'lowshelf' || kind === 'highshelf') {
+      const S = clampFxNumber(qOrSlope, 0.1, 4, 1.0)
+      const alphaShelf =
+        (sinw / 2) * Math.sqrt((A + 1 / A) * (1 / S - 1) + 2)
+      if (kind === 'lowshelf') {
+        const b0 = A * ((A + 1) - (A - 1) * cosw + 2 * sqrtA * alphaShelf)
+        const b1 = 2 * A * ((A - 1) - (A + 1) * cosw)
+        const b2 = A * ((A + 1) - (A - 1) * cosw - 2 * sqrtA * alphaShelf)
+        const a0 = (A + 1) + (A - 1) * cosw + 2 * sqrtA * alphaShelf
+        const a1 = -2 * ((A - 1) + (A + 1) * cosw)
+        const a2 = (A + 1) + (A - 1) * cosw - 2 * sqrtA * alphaShelf
+        return { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 }
+      }
+      const b0 = A * ((A + 1) + (A - 1) * cosw + 2 * sqrtA * alphaShelf)
+      const b1 = -2 * A * ((A - 1) + (A + 1) * cosw)
+      const b2 = A * ((A + 1) + (A - 1) * cosw - 2 * sqrtA * alphaShelf)
+      const a0 = (A + 1) - (A - 1) * cosw + 2 * sqrtA * alphaShelf
+      const a1 = 2 * ((A - 1) - (A + 1) * cosw)
+      const a2 = (A + 1) - (A - 1) * cosw - 2 * sqrtA * alphaShelf
+      return { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 }
+    }
+
+    return biquadCoeffs('bell', f, q, 0, sr)
+  }
+
+  function biquadProcess(st, x) {
+    const y = x * st.b0 + st.z1
+    st.z1 = x * st.b1 + st.z2 - st.a1 * y
+    st.z2 = x * st.b2 - st.a2 * y
+    return y
+  }
+
+  function getFxRuntimeForMusician(musicianId) {
+    let rt = fxRuntimeByMusician.get(musicianId)
+    if (!rt) {
+      rt = { peqByChannel: new Map(), comp: { g: 1 } }
+      fxRuntimeByMusician.set(musicianId, rt)
+    }
+    return rt
+  }
+
+  function peqProcessMono(musicianId, channelId, x, peqSettings) {
+    if (!peqSettings || peqSettings.enabled !== true || !Array.isArray(peqSettings.bands)) return x
+    const rt = getFxRuntimeForMusician(musicianId)
+    let chrt = rt.peqByChannel.get(channelId)
+    const ref = peqSettings
+    if (!chrt || chrt.ref !== ref) {
+      const bands = []
+      for (const b of peqSettings.bands.slice(0, 6)) {
+        const type = String(b?.type || '').trim()
+        if (!['hpf', 'lpf', 'bell', 'lowshelf', 'highshelf'].includes(type)) continue
+        const enabled = b?.enabled !== false
+        const freqHz = clampFxNumber(b?.freqHz, 20, 20000, 1000)
+        const q = clampFxNumber(b?.q, 0.1, 18, 1)
+        const gainDb = clampFxNumber(b?.gainDb, -24, 24, 0)
+        const c = biquadCoeffs(type, freqHz, q, gainDb, MVP_SAMPLE_RATE_HZ)
+        bands.push({
+          enabled,
+          type,
+          freqHz,
+          q,
+          gainDb,
+          b0: c.b0,
+          b1: c.b1,
+          b2: c.b2,
+          a1: c.a1,
+          a2: c.a2,
+          z1: 0,
+          z2: 0,
+        })
+      }
+      chrt = { ref, bands }
+      rt.peqByChannel.set(channelId, chrt)
+    }
+    let y = x
+    for (const st of chrt.bands) {
+      if (!st.enabled) continue
+      y = biquadProcess(st, y)
+    }
+    return y
+  }
+
+  function dbToLinearSafe(db) {
+    return Math.pow(10, (Number(db) || 0) / 20)
+  }
+
+  function compressStereo(musicianId, l, r, cfg) {
+    if (!cfg || cfg.enabled !== true) return { l, r, grDb: 0 }
+    const thr = dbToLinearSafe(cfg.thresholdDb)
+    const ratio = clampFxNumber(cfg.ratio, 1, 30, 3)
+    const makeup = dbToLinearSafe(cfg.makeupDb)
+    const atkMs = clampFxNumber(cfg.attackMs, 0.1, 250, 12)
+    const relMs = clampFxNumber(cfg.releaseMs, 5, 2000, 120)
+    const kneeDb = clampFxNumber(cfg.kneeDb, 0, 24, 3)
+    const knee = dbToLinearSafe(kneeDb)
+    const rt = getFxRuntimeForMusician(musicianId)
+    const st = rt.comp
+    const sr = MVP_SAMPLE_RATE_HZ
+    const atk = Math.exp(-1 / (Math.max(1, (atkMs * sr) / 1000)))
+    const rel = Math.exp(-1 / (Math.max(1, (relMs * sr) / 1000)))
+    const x = Math.max(Math.abs(l), Math.abs(r))
+    let target = 1
+    if (x > 0) {
+      const over = x - thr
+      if (over > 0) {
+        const soft = knee > 0 ? Math.min(1, over / knee) : 1
+        const effRatio = 1 + (ratio - 1) * soft
+        const y = thr + over / effRatio
+        target = y / x
+      }
+    }
+    const gPrev = Number(st.g) || 1
+    const coef = target < gPrev ? atk : rel
+    const g = target + coef * (gPrev - target)
+    st.g = g
+    const outL = l * g * makeup
+    const outR = r * g * makeup
+    const grDb = g > 0 ? -20 * Math.log10(g) : 60
+    return { l: outL, r: outR, grDb }
+  }
+
   function audioTick() {
     const block = audioBlockSamples()
     const delay = (1000 * block) / MVP_SAMPLE_RATE_HZ
     const base = sampleClock
     const sf = state.showfile
     const activeMusicianIds = activeMusicianIdsForAudio()
-    const musicianById = new Map(sf.musicians.map((m) => [m.id, m]))
+    const cacheInvalid = audioTickCache.showfile !== sf || audioTickCache.chIds.length !== sf.channels.length
+    if (cacheInvalid) {
+      audioTickCache.showfile = sf
+      audioTickCache.chIds = sf.channels.map((c) => c.id)
+      audioTickCache.monoById = Object.fromEntries(audioTickCache.chIds.map((id) => [id, 0]))
+      audioTickCache.chCaptureIdx = new Int16Array(audioTickCache.chIds.length)
+      audioTickCache.chMode = new Uint8Array(audioTickCache.chIds.length)
+      audioTickCache.musiciansLen = 0
+      audioTickCache.musicianById = new Map()
+    }
+    if (audioTickCache.musiciansLen !== sf.musicians.length) {
+      audioTickCache.musiciansLen = sf.musicians.length
+      audioTickCache.musicianById = new Map(sf.musicians.map((m) => [m.id, m]))
+    }
+    const musicianById = audioTickCache.musicianById
     const fadeStep = 1 / muteFadeSamples()
     const gOut = 30000
     sampleClock += block
@@ -4248,7 +4568,10 @@ function createServices(app) {
     const useCapture = capBlock !== null
     if (useCapture && capBlock) {
       lastGoodCaptureMs = Date.now()
-      updateCaptureMeters(capBlock, nCh)
+      captureMeterTick += 1
+      if (captureMeterTick % 3 === 0) {
+        updateCaptureMeters(capBlock, nCh)
+      }
     } else {
       decayCaptureMeters(nCh)
     }
@@ -4260,19 +4583,7 @@ function createServices(app) {
         )
       }
     }
-    const monoFrames = new Array(block)
-    if (useCapture) {
-      for (let i = 0; i < block; i++) {
-        monoFrames[i] = monoByChannelFromCapture(capBlock, i, nCh)
-      }
-    } else if (captureChild) {
-      const silentFrame = silentMonoByChannel()
-      monoFrames.fill(silentFrame)
-    } else {
-      for (let i = 0; i < block; i++) {
-        monoFrames[i] = monoByChannelAt(base + i)
-      }
-    }
+    const targets = []
     for (const musicianId of activeMusicianIds) {
       const mStrip = musicianById.get(musicianId)
       if (!mStrip) continue
@@ -4281,39 +4592,160 @@ function createServices(app) {
         rampState = new Map()
         muteRampByMusician.set(musicianId, rampState)
       }
-      const interleaved = new Int16Array(block * 2)
-      for (let i = 0; i < block; i++) {
-        const mono = monoFrames[i]
-        const { l, r } = mixMusicianStereoFromMonoSources(
-          sf,
-          mStrip,
-          mono,
-          {
-            getSourceGainMultiplier(sourceId) {
-              const target = mStrip.sendMutes?.[sourceId] ? 0 : 1
-              const prev = rampState.get(sourceId)
-              const current = typeof prev === 'number' ? prev : target
-              const next =
-                current < target
-                  ? Math.min(target, current + fadeStep)
-                  : current > target
-                    ? Math.max(target, current - fadeStep)
-                    : current
-              rampState.set(sourceId, next)
-              return next
-            },
+      targets.push({
+        musicianId,
+        mStrip,
+        rampState,
+        interleaved: new Int16Array(block * 2),
+      })
+    }
+
+    if (targets.length > 0) {
+      const allChIds = audioTickCache.chIds
+      const allGroupIds = sf.groups.map((g) => g.id)
+      const step = Math.min(1, Math.max(0.02, fadeStep * block))
+      for (const t of targets) {
+        const mult = {}
+        for (const sid of allChIds) {
+          const target = t.mStrip.sendMutes?.[sid] ? 0 : 1
+          const prev = t.rampState.get(sid)
+          const current = typeof prev === 'number' ? prev : target
+          const next =
+            current < target
+              ? Math.min(target, current + step)
+              : current > target
+                ? Math.max(target, current - step)
+                : current
+          t.rampState.set(sid, next)
+          mult[sid] = next
+        }
+        for (const sid of allGroupIds) {
+          const target = t.mStrip.sendMutes?.[sid] ? 0 : 1
+          const prev = t.rampState.get(sid)
+          const current = typeof prev === 'number' ? prev : target
+          const next =
+            current < target
+              ? Math.min(target, current + step)
+              : current > target
+                ? Math.max(target, current - step)
+                : current
+          t.rampState.set(sid, next)
+          mult[sid] = next
+        }
+        t.mixOptions = {
+          getSourceGainMultiplier(sourceId) {
+            return mult[sourceId] ?? 1
           },
-        )
-        // ~-1,1 → s16 com margem (menos clipping duro / menos artefactos “metálicos”)
-        interleaved[i * 2] = Math.max(
-          -32768,
-          Math.min(32767, Math.round(l * gOut)),
-        )
-        interleaved[i * 2 + 1] = Math.max(
-          -32768,
-          Math.min(32767, Math.round(r * gOut)),
-        )
+          transformSourceMono(sourceId, mono) {
+            const peq = t.mStrip.peqByChannel?.[sourceId]
+            return peq ? peqProcessMono(t.musicianId, sourceId, mono, peq) : mono
+          },
+        }
+        t.fxLevels = { prePeak: 0, postPeak: 0, grDb: 0 }
       }
+    }
+
+    if (targets.length > 0 && useCapture && capBlock) {
+      const monoById = audioTickCache.monoById || {}
+      const mx = state.captureInputMatrix || {
+        gainL: 1,
+        gainR: 1,
+        assign: {},
+        gainByIndex: {},
+      }
+      const gi = mx.gainByIndex && typeof mx.gainByIndex === 'object' ? mx.gainByIndex : {}
+      const inputGain = new Float32Array(Math.max(1, nCh))
+      for (let idx = 0; idx < inputGain.length; idx++) {
+        let g = 1
+        const k = String(idx)
+        if (typeof gi[k] === 'number') g = Math.max(0, Math.min(4, gi[k]))
+        else if (idx === 0) g = Math.max(0, Math.min(4, Number(mx.gainL) || 1))
+        else if (idx === 1) g = Math.max(0, Math.min(4, Number(mx.gainR) || 1))
+        inputGain[idx] = g
+      }
+      const assign = mx.assign && typeof mx.assign === 'object' ? mx.assign : {}
+      const chIds = audioTickCache.chIds
+      const chCaptureIdx = audioTickCache.chCaptureIdx
+      const chMode = audioTickCache.chMode
+      let needSumAll = false
+      for (let ci = 0; ci < sf.channels.length; ci++) {
+        const ch = sf.channels[ci]
+        const idx =
+          typeof ch.captureInputIndex === 'number' && Number.isFinite(ch.captureInputIndex)
+            ? Math.floor(ch.captureInputIndex)
+            : -1
+        chCaptureIdx[ci] = idx
+        if (idx < 0) needSumAll = true
+        const tap = ch.sourceTap
+        const modeRaw = assign[ch.id]
+        const legacy = modeRaw === 'L' || modeRaw === 'R' || modeRaw === 'sum' ? modeRaw : null
+        const mode = tap === 'L' || tap === 'R' || tap === 'sum' ? tap : legacy || 'sum'
+        chMode[ci] = mode === 'L' ? 0 : mode === 'R' ? 1 : 2
+      }
+      needSumAll = needSumAll && nCh > 2
+
+      for (let i = 0; i < block; i++) {
+        const baseOff = i * nCh
+        const s0 = capBlock[baseOff] / 32768
+        const L = s0 * inputGain[0]
+        const R = nCh >= 2 ? (capBlock[baseOff + 1] / 32768) * inputGain[1] : L
+        let sumAll = 0
+        if (needSumAll) {
+          for (let c = 0; c < nCh; c++) {
+            sumAll += (capBlock[baseOff + c] / 32768) * inputGain[c]
+          }
+          sumAll /= nCh
+        }
+        for (let ci = 0; ci < chIds.length; ci++) {
+          const id = chIds[ci]
+          const idx = chCaptureIdx[ci]
+          if (idx >= 0) {
+            if (idx < 0 || idx >= nCh) monoById[id] = 0
+            else monoById[id] = (capBlock[baseOff + idx] / 32768) * inputGain[idx]
+          } else {
+            const mode = chMode[ci]
+            if (mode === 0) monoById[id] = L * 0.96
+            else if (mode === 1) monoById[id] = R * 0.96
+            else monoById[id] = nCh > 2 ? sumAll : (L + R) * 0.5
+          }
+        }
+        for (const t of targets) {
+          const mixed = mixMusicianStereoFromMonoSources(sf, t.mStrip, monoById, t.mixOptions)
+          const prePeak = Math.max(Math.abs(mixed.l), Math.abs(mixed.r))
+          if (prePeak > t.fxLevels.prePeak) t.fxLevels.prePeak = prePeak
+          const comp = compressStereo(t.musicianId, mixed.l, mixed.r, t.mStrip.masterComp)
+          const postPeak = Math.max(Math.abs(comp.l), Math.abs(comp.r))
+          if (postPeak > t.fxLevels.postPeak) t.fxLevels.postPeak = postPeak
+          if (comp.grDb > t.fxLevels.grDb) t.fxLevels.grDb = comp.grDb
+          t.interleaved[i * 2] = Math.max(-32768, Math.min(32767, Math.round(comp.l * gOut)))
+          t.interleaved[i * 2 + 1] = Math.max(-32768, Math.min(32767, Math.round(comp.r * gOut)))
+        }
+      }
+    } else if (targets.length > 0 && !useCapture && !captureChild) {
+      for (let i = 0; i < block; i++) {
+        const mono = monoByChannelAt(base + i)
+        for (const t of targets) {
+          const mixed = mixMusicianStereoFromMonoSources(sf, t.mStrip, mono, t.mixOptions)
+          const prePeak = Math.max(Math.abs(mixed.l), Math.abs(mixed.r))
+          if (prePeak > t.fxLevels.prePeak) t.fxLevels.prePeak = prePeak
+          const comp = compressStereo(t.musicianId, mixed.l, mixed.r, t.mStrip.masterComp)
+          const postPeak = Math.max(Math.abs(comp.l), Math.abs(comp.r))
+          if (postPeak > t.fxLevels.postPeak) t.fxLevels.postPeak = postPeak
+          if (comp.grDb > t.fxLevels.grDb) t.fxLevels.grDb = comp.grDb
+          t.interleaved[i * 2] = Math.max(-32768, Math.min(32767, Math.round(comp.l * gOut)))
+          t.interleaved[i * 2 + 1] = Math.max(-32768, Math.min(32767, Math.round(comp.r * gOut)))
+        }
+      }
+    }
+
+    for (const t of targets) {
+      const { musicianId, interleaved } = t
+      fxLevelsByMusician.set(musicianId, {
+        at: Date.now(),
+        prePeak: t.fxLevels?.prePeak ?? 0,
+        postPeak: t.fxLevels?.postPeak ?? 0,
+        grDb: t.fxLevels?.grDb ?? 0,
+      })
       const udpTarget = udpTargets.get(musicianId)
       if (udpTarget) {
         const udpWire = Buffer.from(
@@ -4321,8 +4753,7 @@ function createServices(app) {
             sequence: audioSeq,
             serverTimestampNs: ts,
             pcmInterleavedS16: interleaved,
-            codec:
-              sf.networkProfile === 'wifi_2_4' ? 'mulaw_u8' : 'pcm_s16',
+            codec: sf.networkProfile === 'wifi_2_4' ? 'mulaw_u8' : 'pcm_s16',
           }),
         )
         audioSock.send(udpWire, udpTarget.port, udpTarget.address, (err) => {
@@ -4339,8 +4770,7 @@ function createServices(app) {
           if (ws.readyState === 1) {
             const latencyProfile = wsAudioProfileBySocket.get(ws) || 'stable'
             const pcmWireBytes = interleaved.length * 2 + 32
-            const bufferedAmount =
-              typeof ws.bufferedAmount === 'number' ? ws.bufferedAmount : 0
+            const bufferedAmount = typeof ws.bufferedAmount === 'number' ? ws.bufferedAmount : 0
             const codec = wireCodecForSocket(latencyProfile, bufferedAmount, pcmWireBytes)
             const wire = Buffer.from(
               encodeStereoPcmFrame({
@@ -4350,9 +4780,7 @@ function createServices(app) {
                 codec,
               }),
             )
-            if (
-              bufferedAmount > wire.length * wsBufferedFactorForProfile(latencyProfile)
-            ) {
+            if (bufferedAmount > wire.length * wsBufferedFactorForProfile(latencyProfile)) {
               continue
             }
             try {

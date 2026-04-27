@@ -11,6 +11,30 @@ function dbToLinear(db: number): number {
   return 10 ** (db / 20)
 }
 
+type ShowfileMixCache = {
+  chMap: Map<string, ChannelStrip>
+  grMap: Map<string, GroupBus>
+  chLen: number
+  grLen: number
+}
+
+const mixCacheByShowfile = new WeakMap<Showfile, ShowfileMixCache>()
+
+function getMixCache(sf: Showfile): ShowfileMixCache {
+  const prev = mixCacheByShowfile.get(sf)
+  if (prev && prev.chLen === sf.channels.length && prev.grLen === sf.groups.length) {
+    return prev
+  }
+  const next: ShowfileMixCache = {
+    chMap: new Map(sf.channels.map((c) => [c.id, c])),
+    grMap: new Map(sf.groups.map((g) => [g.id, g])),
+    chLen: sf.channels.length,
+    grLen: sf.groups.length,
+  }
+  mixCacheByShowfile.set(sf, next)
+  return next
+}
+
 /**
  * MVP: “cor” derivada das 3 bandas (substituir por biquads depois).
  * Limita o boost/corte médio para evitar exagerar ruído de quantização / chiado.
@@ -52,6 +76,7 @@ function isSourceMutedForMusician(m: MusicianStrip, sourceId: string): boolean {
 
 export type MixSourceOptions = {
   getSourceGainMultiplier?: (sourceId: string) => number
+  transformSourceMono?: (sourceId: string, mono: number) => number
 }
 
 export function channelStereoFromMono(
@@ -74,6 +99,7 @@ export function groupStereoFromMono(
   channels: ChannelStrip[],
   monoById: Record<string, number>,
   m: MusicianStrip,
+  options?: MixSourceOptions,
 ): { l: number; r: number } {
   if (g.mute) return { l: 0, r: 0 }
   let l = 0
@@ -81,7 +107,8 @@ export function groupStereoFromMono(
   for (const id of g.channelIds) {
     const ch = channels.find((c) => c.id === id)
     if (!ch) continue
-    const mn = monoById[id] ?? 0
+    const raw = monoById[id] ?? 0
+    const mn = options?.transformSourceMono ? options.transformSourceMono(id, raw) : raw
     const lr = channelStereoFromMono(ch, mn, m, id)
     l += lr.l
     r += lr.r
@@ -126,8 +153,9 @@ export function mixMusicianStereoFromMonoSources(
   if (m.mute) return { l: 0, r: 0 }
   let l = 0
   let r = 0
-  const chMap = new Map(sf.channels.map((c) => [c.id, c]))
-  const grMap = new Map(sf.groups.map((g) => [g.id, g]))
+  const cache = getMixCache(sf)
+  const chMap = cache.chMap
+  const grMap = cache.grMap
 
   const scopedExplicit =
     m.scope.channelIds.length > 0 || m.scope.groupIds.length > 0
@@ -136,7 +164,8 @@ export function mixMusicianStereoFromMonoSources(
 
   if (!scopedExplicit || !scopedUsable) {
     for (const ch of sf.channels) {
-      const mn = monoById[ch.id] ?? 0
+      const raw = monoById[ch.id] ?? 0
+      const mn = options?.transformSourceMono ? options.transformSourceMono(ch.id, raw) : raw
       const lr = channelStereoFromMono(ch, mn, m, ch.id)
       const g =
         (isSourceMutedForMusician(m, ch.id) ? 0 : m.sendGains[ch.id] ?? 1) *
@@ -154,7 +183,7 @@ export function mixMusicianStereoFromMonoSources(
 
   for (const gid of groupIdsResolved) {
     const g = grMap.get(gid)!
-    const lr = groupStereoFromMono(g, sf.channels, monoById, m)
+    const lr = groupStereoFromMono(g, sf.channels, monoById, m, options)
     const sg =
       (isSourceMutedForMusician(m, gid) ? 0 : m.sendGains[gid] ?? 1) *
       (options?.getSourceGainMultiplier?.(gid) ?? 1)
@@ -163,7 +192,8 @@ export function mixMusicianStereoFromMonoSources(
   }
   for (const cid of channelIdsResolved) {
     const ch = chMap.get(cid)!
-    const mn = monoById[cid] ?? 0
+    const raw = monoById[cid] ?? 0
+    const mn = options?.transformSourceMono ? options.transformSourceMono(cid, raw) : raw
     const lr = channelStereoFromMono(ch, mn, m, cid)
     const sg =
       (isSourceMutedForMusician(m, cid) ? 0 : m.sendGains[cid] ?? 1) *

@@ -48,6 +48,7 @@
     }
   },
   "dependencies": {
+    "@inear/design-system": "file:../../packages/design-system",
     "@inear/protocol": "file:../../packages/protocol",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",

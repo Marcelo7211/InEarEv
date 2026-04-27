@@ -423,6 +423,7 @@ export default function App() {
     null,
   )
   const mixPollBoostUntil = useRef(0)
+  const levelsPollBoostUntil = useRef(0)
 
   const retornoMusician = useMemo(() => {
     if (!retornoShowfile || !session) return null
@@ -485,6 +486,7 @@ export default function App() {
 
   const bumpMixPoll = useCallback(() => {
     mixPollBoostUntil.current = Date.now() + 6000
+    levelsPollBoostUntil.current = Date.now() + 2500
     void refetchRetornoShowfile()
   }, [refetchRetornoShowfile])
 
@@ -747,17 +749,21 @@ export default function App() {
       return
     }
     let cancelled = false
-    const load = async () => {
-      const levels = await loadAudioInputLevels(normalizedApiBase, session.token)
-      if (!cancelled) setAudioInputLevels(levels)
+    let handle: ReturnType<typeof setTimeout>
+    const schedule = () => {
+      const fast = Date.now() < levelsPollBoostUntil.current
+      const delay = fast ? 500 : 1200
+      handle = setTimeout(async () => {
+        if (cancelled) return
+        const levels = await loadAudioInputLevels(normalizedApiBase, session.token)
+        if (!cancelled) setAudioInputLevels(levels)
+        schedule()
+      }, delay)
     }
-    void load()
-    const timer = setInterval(() => {
-      void load()
-    }, 500)
+    schedule()
     return () => {
       cancelled = true
-      clearInterval(timer)
+      clearTimeout(handle)
     }
   }, [normalizedApiBase, retornoActive, session])
 
@@ -812,6 +818,7 @@ export default function App() {
                   webViewRef={retornoWebRef}
                   masterGain={retornoMasterGain}
                   onMasterGainChange={setRetornoMasterGain}
+                  audioInputLevels={audioInputLevels}
                   streamConnected={Boolean(streamWsUrl && retornoWebPlayerReady)}
                   networkQuality={networkQuality}
                   onLocalMixInteraction={bumpMixPoll}

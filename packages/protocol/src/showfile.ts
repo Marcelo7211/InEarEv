@@ -49,6 +49,31 @@ export interface MusicianScope {
   groupIds: string[]
 }
 
+export type PeqBandType = 'hpf' | 'lpf' | 'bell' | 'lowshelf' | 'highshelf'
+
+export interface PeqBand {
+  type: PeqBandType
+  enabled: boolean
+  freqHz: number
+  q: number
+  gainDb: number
+}
+
+export interface PeqSettings {
+  enabled: boolean
+  bands: PeqBand[]
+}
+
+export interface CompressorSettings {
+  enabled: boolean
+  thresholdDb: number
+  ratio: number
+  attackMs: number
+  releaseMs: number
+  kneeDb: number
+  makeupDb: number
+}
+
 export interface MusicianStrip {
   id: string
   name: string
@@ -62,6 +87,9 @@ export interface MusicianStrip {
   scope: MusicianScope
   /** EQ por canal só neste ouvido / telemóvel (mistura individual). Chave = channel id. */
   eqByChannel?: Record<string, Eq3>
+  peqByChannel?: Record<string, PeqSettings>
+  masterComp?: CompressorSettings
+  masterEq?: PeqSettings
 }
 
 export interface Showfile {
@@ -195,8 +223,22 @@ export function migrateShowfile(sf: Showfile): Showfile {
     if (!m.eqByChannel || typeof m.eqByChannel !== 'object') {
       m.eqByChannel = {}
     }
+    if (!m.peqByChannel || typeof m.peqByChannel !== 'object') {
+      m.peqByChannel = {}
+    }
     if (!m.sendMutes || typeof m.sendMutes !== 'object') {
       m.sendMutes = {}
+    }
+    if (!m.masterComp || typeof m.masterComp !== 'object') {
+      m.masterComp = {
+        enabled: false,
+        thresholdDb: -12,
+        ratio: 3,
+        attackMs: 12,
+        releaseMs: 120,
+        kneeDb: 3,
+        makeupDb: 0,
+      }
     }
     const explicit =
       m.scope.channelIds.length > 0 || m.scope.groupIds.length > 0
@@ -213,6 +255,20 @@ export function migrateShowfile(sf: Showfile): Showfile {
 
 function emptyEq(): Eq3 {
   return { lowDb: 0, midDb: 0, highDb: 0 }
+}
+
+function defaultPeq(): PeqSettings {
+  return {
+    enabled: false,
+    bands: [
+      { type: 'hpf', enabled: true, freqHz: 80, q: 0.707, gainDb: 0 },
+      { type: 'bell', enabled: true, freqHz: 250, q: 1.0, gainDb: 0 },
+      { type: 'bell', enabled: true, freqHz: 800, q: 1.0, gainDb: 0 },
+      { type: 'bell', enabled: true, freqHz: 2500, q: 1.0, gainDb: 0 },
+      { type: 'highshelf', enabled: true, freqHz: 9000, q: 0.707, gainDb: 0 },
+      { type: 'lpf', enabled: false, freqHz: 18000, q: 0.707, gainDb: 0 },
+    ],
+  }
 }
 
 export function defaultShowfile(): Showfile {
@@ -233,6 +289,17 @@ export function defaultShowfile(): Showfile {
         mute: false,
         scope: { channelIds: [], groupIds: [] },
         eqByChannel: {},
+        peqByChannel: {},
+        masterComp: {
+          enabled: false,
+          thresholdDb: -12,
+          ratio: 3,
+          attackMs: 12,
+          releaseMs: 120,
+          kneeDb: 3,
+          makeupDb: 0,
+        },
+        masterEq: defaultPeq(),
       },
       {
         id: 'm2',
@@ -244,6 +311,17 @@ export function defaultShowfile(): Showfile {
         mute: false,
         scope: { channelIds: [], groupIds: [] },
         eqByChannel: {},
+        peqByChannel: {},
+        masterComp: {
+          enabled: false,
+          thresholdDb: -12,
+          ratio: 3,
+          attackMs: 12,
+          releaseMs: 120,
+          kneeDb: 3,
+          makeupDb: 0,
+        },
+        masterEq: defaultPeq(),
       },
     ],
   }

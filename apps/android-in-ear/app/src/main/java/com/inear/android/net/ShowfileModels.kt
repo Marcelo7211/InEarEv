@@ -47,6 +47,51 @@ data class MusicianScope(
 )
 
 @Serializable
+data class PeqBand(
+    val type: String = "bell",
+    val enabled: Boolean = true,
+    val freqHz: Double = 1000.0,
+    val q: Double = 1.0,
+    val gainDb: Double = 0.0,
+)
+
+@Serializable
+data class PeqSettings(
+    val enabled: Boolean = false,
+    val bands: List<PeqBand> = emptyList(),
+)
+
+@Serializable
+data class CompressorSettings(
+    val enabled: Boolean = false,
+    val thresholdDb: Double = -12.0,
+    val ratio: Double = 3.0,
+    val attackMs: Double = 12.0,
+    val releaseMs: Double = 120.0,
+    val kneeDb: Double = 3.0,
+    val makeupDb: Double = 0.0,
+)
+
+@Serializable
+data class DelaySettings(
+    val enabled: Boolean = false,
+    val timeMs: Double = 220.0,
+    val feedback: Double = 0.3,
+    val mix: Double = 0.25,
+    val outputDb: Double = 0.0,
+)
+
+@Serializable
+data class ReverbSettings(
+    val enabled: Boolean = false,
+    val size: Double = 0.5,
+    val decayS: Double = 1.4,
+    val damping: Double = 0.45,
+    val mix: Double = 0.2,
+    val preDelayMs: Double = 12.0,
+)
+
+@Serializable
 data class MusicianStrip(
     val id: String,
     val name: String,
@@ -57,6 +102,11 @@ data class MusicianStrip(
     val mute: Boolean = false,
     val scope: MusicianScope = MusicianScope(),
     val eqByChannel: Map<String, Eq3>? = null,
+    val peqByChannel: Map<String, PeqSettings>? = null,
+    val fxBypassByChannel: Map<String, Boolean>? = null,
+    val masterComp: CompressorSettings? = null,
+    val masterDelay: DelaySettings? = null,
+    val masterReverb: ReverbSettings? = null,
 )
 
 @Serializable

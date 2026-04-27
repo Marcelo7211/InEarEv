@@ -1,4 +1,26 @@
 :root {
+  /* Tokens "console" — espelhados de @inear/design-system/tokens.ts */
+  --console-bg-chassis: #05080d;
+  --console-bg-panel: #0b1118;
+  --console-bg-scribble: #0e1825;
+  --console-bg-rail: #121a26;
+  --console-bg-recess: #070b11;
+  --console-border: #1e2a3c;
+  --console-border-metal: #2a394f;
+  --console-border-hi: #3d5a8a;
+  --console-text-hi: #e8eef7;
+  --console-text-mid: #9caec6;
+  --console-text-lo: #5b6a82;
+  --console-led-green: #39ff14;
+  --console-led-amber: #ffb020;
+  --console-led-red: #ff3b3b;
+  --console-led-blue: #4ea3ff;
+  --console-fader-cap: #cfd5df;
+  --console-radius-strip: 6px;
+  --console-radius-panel: 10px;
+  --console-font-scribble: ui-monospace, Menlo, Consolas, "Roboto Mono", "Courier New", monospace;
+  --console-font-digit: ui-monospace, Menlo, Consolas, "Roboto Mono", "Courier New", monospace;
+
   font-family:
     Inter,
     system-ui,
@@ -7,15 +29,73 @@
     "Segoe UI",
     sans-serif;
   line-height: 1.5;
-  color: #e8eaed;
+  color: var(--console-text-hi);
   background:
     radial-gradient(circle at top, rgba(88, 166, 255, 0.1), transparent 28%),
-    linear-gradient(180deg, #06090f 0%, #0c1118 100%);
+    linear-gradient(180deg, var(--console-bg-chassis) 0%, var(--console-bg-panel) 100%);
   color-scheme: dark;
   font-synthesis-weight: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Utilitários de console reutilizáveis no Admin web. */
+.console-panel {
+  background: var(--console-bg-panel);
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius-panel);
+}
+
+.console-recess {
+  background: var(--console-bg-recess);
+  border: 1px solid var(--console-border);
+  border-radius: var(--console-radius-strip);
+}
+
+.console-scribble {
+  font-family: var(--console-font-scribble);
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: var(--console-text-hi);
+}
+
+.console-digit {
+  font-family: var(--console-font-digit);
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  font-variant-numeric: tabular-nums;
+  color: var(--console-text-mid);
+}
+
+.console-led {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  border: 1px solid #1c2531;
+  background: #1c2531;
+}
+.console-led--green { background: var(--console-led-green); border-color: var(--console-led-green); box-shadow: 0 0 6px rgba(57, 255, 20, 0.65); }
+.console-led--amber { background: var(--console-led-amber); border-color: var(--console-led-amber); box-shadow: 0 0 6px rgba(255, 176, 32, 0.6); }
+.console-led--red { background: var(--console-led-red); border-color: var(--console-led-red); box-shadow: 0 0 6px rgba(255, 59, 59, 0.6); }
+.console-led--blue { background: var(--console-led-blue); border-color: var(--console-led-blue); box-shadow: 0 0 6px rgba(78, 163, 255, 0.6); }
+
+.console-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--console-bg-panel);
+  border: 1px solid var(--console-border);
+  border-radius: 999px;
+}
+.console-brand__txt {
+  font-family: var(--console-font-digit);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 1.4px;
+  color: var(--console-text-mid);
 }
 
 html {

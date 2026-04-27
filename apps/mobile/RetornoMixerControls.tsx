@@ -1,9 +1,14 @@
-import type { ChannelStrip, Eq3, MusicianStrip, Showfile } from '@inear/protocol'
+import type { ChannelStrip as ChannelStripData, Eq3, MusicianStrip, PeqSettings, Showfile } from '@inear/protocol'
 import {
   channelAccentColor,
-  channelIconBadge,
   retornoMixerChannelOrder,
 } from '@inear/protocol'
+import {
+  consolePalette,
+  consoleRadius,
+  consoleSpacing,
+  consoleType,
+} from '@inear/design-system'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ScrollView,
@@ -16,7 +21,13 @@ import WebView from 'react-native-webview'
 import type { RefObject } from 'react'
 
 import { RetornoFader } from './RetornoFader'
-import { RetornoVerticalFader } from './RetornoVerticalFader'
+import {
+  ChannelStrip,
+  Knob,
+  LedButton,
+  Meter,
+  VerticalFader,
+} from './components'
 
 export function parseJwtSub(token: string): string {
   try {
@@ -32,7 +43,7 @@ export function parseJwtSub(token: string): string {
   }
 }
 
-function pcmIndexFromChannel(ch: ChannelStrip): number | null {
+function pcmIndexFromChannel(ch: ChannelStripData): number | null {
   if (typeof ch.captureInputIndex === 'number' && Number.isFinite(ch.captureInputIndex)) {
     return Math.floor(ch.captureInputIndex)
   }
@@ -44,28 +55,15 @@ function pcmIndexFromChannel(ch: ChannelStrip): number | null {
   return null
 }
 
-function lightenHexColor(hex: string, amount = 0.46): string {
-  const raw = hex.trim().replace('#', '')
-  if (!/^[0-9a-fA-F]{6}$/.test(raw)) return hex
-  const to = (s: string) => Number.parseInt(s, 16)
-  const r = to(raw.slice(0, 2))
-  const g = to(raw.slice(2, 4))
-  const b = to(raw.slice(4, 6))
-  const mix = (v: number) => Math.round(v + (255 - v) * amount)
-  return `#${[mix(r), mix(g), mix(b)]
-    .map((v) => v.toString(16).padStart(2, '0'))
-    .join('')}`
-}
-
 /** Título principal + linha de ajuda: prioriza «Entrada PCM n» para faixas do agregado. */
-function stripTitles(ch: ChannelStrip): { primary: string; secondary: string } {
+function stripTitles(ch: ChannelStripData): { primary: string; secondary: string } {
   const legacySubtitle = (): string => {
     if (typeof ch.captureInputIndex === 'number' && Number.isFinite(ch.captureInputIndex)) {
-      return `Índice captura ${ch.captureInputIndex}`
+      return `IN ${ch.captureInputIndex}`
     }
-    if (ch.sourceTap === 'L') return 'Legado: mistura L'
-    if (ch.sourceTap === 'R') return 'Legado: mistura R'
-    if (ch.sourceTap === 'sum') return 'Soma L+R'
+    if (ch.sourceTap === 'L') return 'Mix L'
+    if (ch.sourceTap === 'R') return 'Mix R'
+    if (ch.sourceTap === 'sum') return 'Sum L+R'
     return ''
   }
   const pcm = pcmIndexFromChannel(ch)
@@ -75,14 +73,14 @@ function stripTitles(ch: ChannelStrip): { primary: string; secondary: string } {
       primary:
         customName && !/^if_\d+$/i.test(customName)
           ? customName
-          : `Entrada PCM ${pcm}`,
-      secondary: `Entrada PCM ${pcm}`,
+          : `IN ${pcm}`,
+      secondary: `IN ${pcm}`,
     }
   }
   if (pcm != null) {
     return {
-      primary: ch.name || `Entrada PCM ${pcm}`,
-      secondary: `Entrada PCM ${pcm}`,
+      primary: ch.name || `IN ${pcm}`,
+      secondary: `IN ${pcm}`,
     }
   }
   return { primary: ch.name, secondary: legacySubtitle() }
@@ -104,21 +102,13 @@ export type NetworkQualityUi = {
   hint?: string
 }
 
-function panShortLabel(pan: number): string {
-  const p = Math.max(-1, Math.min(1, pan))
-  if (p < -0.35) return 'L'
-  if (p > 0.35) return 'R'
-  return 'C'
-}
-
-function groupBadgeLabel(sf: Showfile, channelId: string): string | null {
-  const idx = sf.groups.findIndex((g) => g.channelIds.includes(channelId))
-  if (idx < 0) return null
-  return `G${String(idx + 1).padStart(2, '0')}`
+export type AudioInputLevelsUi = {
+  receiving: boolean
+  levelsByIndex: Record<string, number>
 }
 
 function effectiveEq(
-  ch: ChannelStrip,
+  ch: ChannelStripData,
   musician: MusicianStrip,
   cid: string,
 ): Eq3 {
@@ -127,6 +117,20 @@ function effectiveEq(
     lowDb: ear?.lowDb ?? ch.eq.lowDb,
     midDb: ear?.midDb ?? ch.eq.midDb,
     highDb: ear?.highDb ?? ch.eq.highDb,
+  }
+}
+
+function defaultPeqSettings(): PeqSettings {
+  return {
+    enabled: true,
+    bands: [
+      { type: 'hpf', enabled: true, freqHz: 80, q: 0.707, gainDb: 0 },
+      { type: 'bell', enabled: true, freqHz: 250, q: 1.0, gainDb: 0 },
+      { type: 'bell', enabled: true, freqHz: 800, q: 1.0, gainDb: 0 },
+      { type: 'bell', enabled: true, freqHz: 2500, q: 1.0, gainDb: 0 },
+      { type: 'highshelf', enabled: true, freqHz: 9000, q: 0.707, gainDb: 0 },
+      { type: 'lpf', enabled: false, freqHz: 18000, q: 0.707, gainDb: 0 },
+    ],
   }
 }
 
@@ -139,7 +143,8 @@ type Props = {
   webViewRef: RefObject<InstanceType<typeof WebView> | null>
   masterGain: number
   onMasterGainChange: (v: number) => void
-  /** Retorno WebSocket/Web Audio ativo (para LED “power”). */
+  audioInputLevels?: AudioInputLevelsUi | null
+  /** Retorno WebSocket/Web Audio ativo (para LED "power"). */
   streamConnected?: boolean
   /** Medidor agregado no servidor (GET /api/network-quality). */
   networkQuality?: NetworkQualityUi | null
@@ -156,17 +161,37 @@ export function RetornoMixerControls({
   webViewRef,
   masterGain,
   onMasterGainChange,
+  audioInputLevels = null,
   streamConnected = false,
   networkQuality = null,
   onLocalMixInteraction,
 }: Props) {
-  const [mixerTab, setMixerTab] = useState<'channels' | 'groups'>('channels')
+  const [mixerTab, setMixerTab] = useState<'channels' | 'groups' | 'overview'>(
+    'channels',
+  )
   const [expandedFxId, setExpandedFxId] = useState<string | null>(null)
   const [localSendMutes, setLocalSendMutes] = useState<Record<string, boolean>>({})
+  const [bank, setBank] = useState(0)
+  const channelsById = useMemo(() => {
+    if (!showfile) return new Map<string, ChannelStripData>()
+    return new Map(showfile.channels.map((c) => [c.id, c]))
+  }, [showfile])
   const channelIds = useMemo(() => {
     if (!showfile || !musician) return []
     return retornoMixerChannelOrder(showfile, musician)
   }, [showfile, musician])
+  const pageSize = 8
+  const bankCount = Math.max(1, Math.ceil(channelIds.length / pageSize))
+  const pagedChannelIds = useMemo(() => {
+    const safe = Math.max(0, Math.min(bank, bankCount - 1))
+    const start = safe * pageSize
+    return channelIds.slice(start, start + pageSize)
+  }, [bank, bankCount, channelIds])
+  const levelsByIndex = audioInputLevels?.levelsByIndex ?? {}
+
+  useEffect(() => {
+    setBank(0)
+  }, [musician?.id])
 
   const sendThrottleAt = useRef<Record<string, number>>({})
   const muteTapAt = useRef<Record<string, number>>({})
@@ -203,13 +228,12 @@ export function RetornoMixerControls({
     [apiBase, token, musician, onLocalMixInteraction, onMusicianUpdated],
   )
 
-  /** PATCH durante o arrasto (~12/s por faixa). */
   const patchSendLive = useCallback(
     async (key: string, value: number) => {
       if (!musician) return
       const now = Date.now()
       const last = sendThrottleAt.current[key] ?? 0
-      if (now - last < 40) return
+      if (now - last < 60) return
       sendThrottleAt.current[key] = now
       const g = Math.max(0, Math.min(4, value))
       const base = apiBase.trim().replace(/\/$/, '')
@@ -237,8 +261,6 @@ export function RetornoMixerControls({
       if (now - last < 100) return
       muteTapAt.current[key] = now
       setLocalSendMutes((prev) => ({ ...prev, [key]: muted }))
-      const label = `mute:${key}:${now}`
-      console.time(label)
       const base = apiBase.trim().replace(/\/$/, '')
       try {
         const r = await fetch(`${base}/api/showfile/musician/${musician.id}`, {
@@ -251,16 +273,13 @@ export function RetornoMixerControls({
         })
         if (!r.ok) {
           setLocalSendMutes((prev) => ({ ...prev, [key]: !muted }))
-          console.timeEnd(label)
           return
         }
         const m = (await r.json()) as MusicianStrip
-        console.timeEnd(label)
         onMusicianUpdated(m)
         onLocalMixInteraction?.()
       } catch {
         setLocalSendMutes((prev) => ({ ...prev, [key]: !muted }))
-        console.timeEnd(label)
       }
     },
     [apiBase, musician, onLocalMixInteraction, onMusicianUpdated, token],
@@ -288,6 +307,30 @@ export function RetornoMixerControls({
             }),
           },
         )
+        if (!r.ok) return
+        const m = (await r.json()) as MusicianStrip
+        onMusicianUpdated(m)
+        onLocalMixInteraction?.()
+      } catch {
+        /* ignore */
+      }
+    },
+    [apiBase, token, musician, onLocalMixInteraction, onMusicianUpdated],
+  )
+
+  const patchPeq = useCallback(
+    async (channelId: string, nextPeq: PeqSettings) => {
+      if (!musician) return
+      const base = apiBase.trim().replace(/\/$/, '')
+      try {
+        const r = await fetch(`${base}/api/showfile/musician/${musician.id}`, {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ peqByChannel: { [channelId]: nextPeq } }),
+        })
         if (!r.ok) return
         const m = (await r.json()) as MusicianStrip
         onMusicianUpdated(m)
@@ -337,12 +380,9 @@ export function RetornoMixerControls({
     return (
       <View style={s.boxWarn}>
         <Text style={s.warn}>
-          Ainda não há canais no mix. O áudio da mesa (ex.: Avid Fast Track ligado ao{' '}
-          <Text style={s.bold}>Mac</Text>) é captado no PC; no painel admin do desktop
-          usa &quot;Sincronizar faixas&quot; no Mac (dispositivo agregado, N canais) para criar
-          as entradas.
-          O telemóvel só controla sends e EQ do teu ouvido — não vê a interface USB do Mac
-          como entrada física.
+          Ainda não há canais no mix. O áudio da mesa é captado no PC; no painel
+          admin do desktop usa &quot;Sincronizar faixas&quot; (dispositivo agregado, N
+          canais) para criar as entradas.
         </Text>
       </View>
     )
@@ -350,58 +390,165 @@ export function RetornoMixerControls({
 
   const netDot =
     networkQuality == null
-      ? '#484f58'
+      ? consolePalette.textLo
       : networkQuality.level === 'good'
-        ? '#39ff14'
+        ? consolePalette.ledGreen
         : networkQuality.level === 'warn'
-          ? '#d29922'
-          : '#f85149'
+          ? consolePalette.ledAmber
+          : consolePalette.ledRed
+
+  const expandedChannel = expandedFxId ? channelsById.get(expandedFxId) ?? null : null
 
   return (
     <View style={s.wrap}>
+      {/* CABEÇALHO — barra do gabinete: marca, segmento de modo, LEDs power/net */}
       <View style={s.topBar}>
-        <Pressable style={s.iconBtn} hitSlop={8}>
-          <Text style={s.iconBtnTxt}>☰</Text>
-        </Pressable>
+        <View style={s.brandBlock}>
+          <View style={[s.brandLed, { backgroundColor: consolePalette.ledGreen }]} />
+          <Text style={s.brandTxt}>STAGE • MIX</Text>
+        </View>
         <View style={s.segment}>
-          <Pressable
+          <SegBtn
+            label="Canais"
+            active={mixerTab === 'channels'}
             onPress={() => setMixerTab('channels')}
-            style={[s.segBtn, mixerTab === 'channels' && s.segBtnOn]}
-          >
-            <Text style={[s.segTxt, mixerTab === 'channels' && s.segTxtOn]}>
-              Canais
-            </Text>
-          </Pressable>
-          <Pressable
+          />
+          <SegBtn
+            label="Grupos"
+            active={mixerTab === 'groups'}
             onPress={() => setMixerTab('groups')}
-            style={[s.segBtn, mixerTab === 'groups' && s.segBtnOn]}
-          >
-            <Text style={[s.segTxt, mixerTab === 'groups' && s.segTxtOn]}>
-              Grupos
-            </Text>
-          </Pressable>
+          />
+          <SegBtn
+            label="Overview"
+            active={mixerTab === 'overview'}
+            onPress={() => setMixerTab('overview')}
+          />
         </View>
         <View style={s.topBarRight}>
-          <Text style={s.powerIcon}>⏻</Text>
-          <View
-            style={[
-              s.powerLed,
-              { backgroundColor: streamConnected ? '#2ea043' : '#30363d' },
-            ]}
-          />
-          <View style={[s.netDot, { backgroundColor: netDot }]} />
+          <View style={[s.led, { backgroundColor: streamConnected ? consolePalette.ledGreen : '#1c2531' }]} />
+          <Text style={s.ledLbl}>PWR</Text>
+          <View style={[s.led, { backgroundColor: netDot }]} />
+          <Text style={s.ledLbl}>NET</Text>
         </View>
       </View>
-      {networkQuality ? (
+
+      {networkQuality?.hint ? (
         <Text style={s.netHint} numberOfLines={2}>
-          {networkQuality.hint ?? ''}
-          {networkQuality.rttMs != null
-            ? ` · RTT ~${networkQuality.rttMs} ms`
-            : ''}
+          {networkQuality.hint}
+          {networkQuality.rttMs != null ? ` · RTT ~${networkQuality.rttMs} ms` : ''}
         </Text>
       ) : null}
 
-      {mixerTab === 'groups' ? (
+      {/* BANCOS — apenas no modo de canais */}
+      {mixerTab === 'channels' && bankCount > 1 ? (
+        <View style={s.bankRow}>
+          {Array.from({ length: bankCount }, (_, i) => i).map((i) => {
+            const lo = i * pageSize + 1
+            const hi = Math.min((i + 1) * pageSize, channelIds.length)
+            return (
+              <Pressable
+                key={String(i)}
+                onPress={() => setBank(i)}
+                style={[s.bankBtn, bank === i && s.bankBtnOn]}
+              >
+                <Text style={[s.bankTxt, bank === i && s.bankTxtOn]}>
+                  {lo}-{hi}
+                </Text>
+              </Pressable>
+            )
+          })}
+        </View>
+      ) : null}
+
+      {/* CORPO PRINCIPAL */}
+      {mixerTab === 'channels' ? (
+        <ScrollView
+          horizontal
+          style={s.stripsScroll}
+          contentContainerStyle={s.stripsRow}
+          showsHorizontalScrollIndicator
+          nestedScrollEnabled
+        >
+          {pagedChannelIds.map((cid, idx) => {
+            const ch = channelsById.get(cid)
+            if (!ch) return null
+            const send = musician.sendGains[cid] ?? 1
+            const sendMuted = Boolean(localSendMutes[cid] ?? musician.sendMutes?.[cid])
+            const accent = channelAccentColor(ch)
+            const { primary, secondary } = stripTitles(ch)
+            const globalIdx = bank * pageSize + idx
+            const num = String(globalIdx + 1).padStart(2, '0')
+            const expanded = expandedFxId === cid
+            const pcm = pcmIndexFromChannel(ch)
+            const lvl = pcm != null ? Math.max(0, Math.min(1, Number(levelsByIndex[String(pcm)]) || 0)) : 0
+            return (
+              <ChannelStrip
+                key={cid}
+                accent={accent}
+                number={num}
+                name={primary}
+                subtitle={secondary}
+                sendValue={send}
+                onSendCommit={(v) => void patchSend(cid, v)}
+                onSendLive={(v) => void patchSendLive(cid, v)}
+                muted={sendMuted}
+                onToggleMute={() => void patchSendMute(cid, !sendMuted)}
+                soloAvailable={false}
+                fxOn={expanded}
+                onToggleFx={() => setExpandedFxId((x) => (x === cid ? null : cid))}
+                pan={ch.pan}
+                inputLevel={lvl}
+              />
+            )
+          })}
+        </ScrollView>
+      ) : mixerTab === 'overview' ? (
+        <ScrollView
+          style={s.overviewScroll}
+          contentContainerStyle={s.overviewGrid}
+          showsVerticalScrollIndicator
+          nestedScrollEnabled
+        >
+          {channelIds.map((cid, idx) => {
+            const ch = channelsById.get(cid)
+            if (!ch) return null
+            const send = musician.sendGains[cid] ?? 1
+            const sendMuted = Boolean(localSendMutes[cid] ?? musician.sendMutes?.[cid])
+            const accent = channelAccentColor(ch)
+            const { primary } = stripTitles(ch)
+            const num = String(idx + 1).padStart(2, '0')
+            const pcm = pcmIndexFromChannel(ch)
+            const lvl = pcm != null ? Math.max(0, Math.min(1, Number(levelsByIndex[String(pcm)]) || 0)) : 0
+            return (
+              <Pressable
+                key={cid}
+                style={[
+                  s.miniStrip,
+                  { borderColor: sendMuted ? consolePalette.ledRed : consolePalette.borderMetal },
+                ]}
+                onPress={() => {
+                  const targetBank = Math.floor(idx / pageSize)
+                  setBank(targetBank)
+                  setMixerTab('channels')
+                }}
+              >
+                <View style={[s.miniBar, { backgroundColor: accent }]}>
+                  <Text style={s.miniNum}>{num}</Text>
+                </View>
+                <Text style={s.miniName} numberOfLines={1}>
+                  {primary}
+                </Text>
+                <View style={s.miniMeterRow}>
+                  <Meter level={lvl} height={36} width={6} />
+                  <Text style={[s.miniVol, { color: accent }]}>
+                    {Math.round(send * 100)}
+                  </Text>
+                </View>
+              </Pressable>
+            )
+          })}
+        </ScrollView>
+      ) : (
         <ScrollView
           style={s.listScroll}
           nestedScrollEnabled
@@ -410,7 +557,7 @@ export function RetornoMixerControls({
         >
           {musician.scope.groupIds.length === 0 ? (
             <Text style={s.groupsEmpty}>
-              Sem subgrupos no teu escopo. O técnico pode associar um Aux / grupo no
+              Sem subgrupos no teu escopo. O técnico pode associar um Aux/grupo no
               desktop para misturares só esse bus com o teu ouvido.
             </Text>
           ) : (
@@ -425,7 +572,7 @@ export function RetornoMixerControls({
                 <View key={gid} style={s.groupCard}>
                   <View style={s.rowTop}>
                     <Text style={s.groupTitle}>{g.name}</Text>
-                    <Text style={s.volPill}>Vol {Math.round(v * 100)}%</Text>
+                    <Text style={s.volPill}>VOL {Math.round(v * 100)}%</Text>
                   </View>
                   <RetornoFader
                     value={v}
@@ -434,162 +581,49 @@ export function RetornoMixerControls({
                     onCommit={(nv) => void patchSend(gid, nv)}
                   />
                   <View style={s.rowActions}>
-                    <Pressable
-                      style={[s.msBtn, gm && s.msBtnOn]}
+                    <LedButton
+                      label="MUTE"
+                      color="red"
+                      on={gm}
                       onPress={() => void patchSendMute(gid, !gm)}
-                    >
-                      <Text style={s.msBtnTxt}>M</Text>
-                    </Pressable>
+                      width={64}
+                    />
                   </View>
                 </View>
               )
             })
           )}
         </ScrollView>
-      ) : (
-        <ScrollView
-          style={s.listScroll}
-          nestedScrollEnabled
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator
-        >
-          {channelIds.map((cid, idx) => {
-            const ch = showfile.channels.find((c) => c.id === cid)
-            if (!ch) return null
-            const send = musician.sendGains[cid] ?? 1
-            const sendMuted = Boolean(
-              localSendMutes[cid] ?? musician.sendMutes?.[cid],
-            )
-            const eq = effectiveEq(ch, musician, cid)
-            const accentColor = channelAccentColor(ch)
-            const { primary } = stripTitles(ch)
-            const badge = channelIconBadge(ch.icon)
-            const gBadge = groupBadgeLabel(showfile, cid)
-            const num = String(idx + 1).padStart(2, '0')
-            const expanded = expandedFxId === cid
-            return (
-              <View key={cid} style={[s.channelCard, { borderLeftColor: accentColor }]}>
-                <View style={s.channelRow}>
-                  <View style={s.channelLeft}>
-                    <Text style={s.chNum}>{num}</Text>
-                    <View
-                      style={[
-                        s.chIcon,
-                        {
-                          backgroundColor: sendMuted
-                            ? lightenHexColor(accentColor, 0.5)
-                            : accentColor,
-                        },
-                      ]}
-                    >
-                      <Text style={s.chIconTxt}>{badge}</Text>
-                    </View>
-                    <View style={s.chTitles}>
-                      <Text style={s.chName} numberOfLines={1}>
-                        {primary}
-                      </Text>
-                      <View style={s.chMeta}>
-                        {gBadge ? (
-                          <Text style={[s.gBadge, { color: accentColor }]}>
-                            {gBadge}
-                          </Text>
-                        ) : (
-                          <Text style={s.gBadgeMuted}>—</Text>
-                        )}
-                      </View>
-                    </View>
-                  </View>
-                  <View style={s.msFx}>
-                    <Pressable
-                      style={[s.msBtn, sendMuted && s.msBtnOn]}
-                      onPress={() => void patchSendMute(cid, !sendMuted)}
-                    >
-                      <Text style={s.msBtnTxt}>M</Text>
-                    </Pressable>
-                    <View style={[s.msBtn, s.msBtnDisabled]}>
-                      <Text style={s.msBtnTxtDim}>S</Text>
-                    </View>
-                    <Pressable
-                      style={[s.msBtn, expanded && s.msBtnOn]}
-                      onPress={() =>
-                        setExpandedFxId((x) => (x === cid ? null : cid))
-                      }
-                    >
-                      <Text style={s.msBtnTxt}>FX</Text>
-                    </Pressable>
-                  </View>
-                  <View style={s.faderCol}>
-                    <RetornoFader
-                      value={send}
-                      min={0}
-                      max={4}
-                      onCommit={(nv) => void patchSend(cid, nv)}
-                    />
-                    <Text style={[s.volReadout, { color: accentColor }]}>
-                      Vol {Math.round(send * 100)}%
-                    </Text>
-                  </View>
-                </View>
-                <View style={s.panRow}>
-                  <Text style={s.panLbl}>Pan (mesa)</Text>
-                  <Text style={[s.panVal, { color: accentColor }]}>
-                    {panShortLabel(ch.pan)}
-                  </Text>
-                </View>
-                {expanded ? (
-                  ch.lockEq ? (
-                    <Text style={s.eqLocked}>EQ bloqueado pelo técnico</Text>
-                  ) : (
-                    <View style={s.eqBlock}>
-                      <Text style={s.eqHdrSm}>EQ neste ouvido</Text>
-                      <View style={s.eqRowSm}>
-                        <Text style={s.eqLblSm}>L</Text>
-                        <RetornoFader
-                          compact
-                          value={eq.lowDb}
-                          min={-12}
-                          max={12}
-                          onCommit={(nv) => void patchEqBand(cid, 'lowDb', nv)}
-                        />
-                      </View>
-                      <View style={s.eqRowSm}>
-                        <Text style={s.eqLblSm}>M</Text>
-                        <RetornoFader
-                          compact
-                          value={eq.midDb}
-                          min={-12}
-                          max={12}
-                          onCommit={(nv) => void patchEqBand(cid, 'midDb', nv)}
-                        />
-                      </View>
-                      <View style={s.eqRowSm}>
-                        <Text style={s.eqLblSm}>H</Text>
-                        <RetornoFader
-                          compact
-                          value={eq.highDb}
-                          min={-12}
-                          max={12}
-                          onCommit={(nv) =>
-                            void patchEqBand(cid, 'highDb', nv)
-                          }
-                        />
-                      </View>
-                    </View>
-                  )
-                ) : null}
-              </View>
-            )
-          })}
-        </ScrollView>
       )}
 
-      <View style={s.masterRow}>
-        <Text style={s.masterLbl}>MASTER</Text>
+      {/* PAINEL FX EXPANDIDO */}
+      {expandedChannel && mixerTab === 'channels' ? (
+        <FxPanel
+          channel={expandedChannel}
+          eq={effectiveEq(expandedChannel, musician, expandedChannel.id)}
+          peq={(musician as MusicianStrip).peqByChannel?.[expandedChannel.id] ?? null}
+          accent={channelAccentColor(expandedChannel)}
+          onClose={() => setExpandedFxId(null)}
+          onEqBand={(band, v) => void patchEqBand(expandedChannel.id, band, v)}
+          onPeq={(p) => void patchPeq(expandedChannel.id, p)}
+          onCreateDefaultPeq={() => void patchPeq(expandedChannel.id, defaultPeqSettings())}
+        />
+      ) : null}
+
+      {/* FAIXA DE MASTER */}
+      <View style={s.masterBar}>
+        <View style={s.masterLabelCol}>
+          <Text style={s.masterLbl}>MASTER</Text>
+          <Text style={s.masterSub}>monitor</Text>
+        </View>
         <View style={s.masterFader}>
-          <RetornoVerticalFader
+          <VerticalFader
             value={masterGain}
             min={0}
             max={2}
+            accent={consolePalette.ledBlue}
+            trackHeight={120}
+            resetValue={1}
             onLiveChange={(v) => {
               onMasterGainChange(v)
               pushMasterToWebLive(v)
@@ -607,96 +641,392 @@ export function RetornoMixerControls({
   )
 }
 
+function SegBtn({
+  label,
+  active,
+  onPress,
+}: {
+  label: string
+  active: boolean
+  onPress: () => void
+}) {
+  return (
+    <Pressable onPress={onPress} style={[s.segBtn, active && s.segBtnOn]}>
+      <Text style={[s.segTxt, active && s.segTxtOn]}>{label}</Text>
+    </Pressable>
+  )
+}
+
+function FxPanel({
+  channel,
+  eq,
+  peq,
+  accent,
+  onClose,
+  onEqBand,
+  onPeq,
+  onCreateDefaultPeq,
+}: {
+  channel: ChannelStripData
+  eq: Eq3
+  peq: PeqSettings | null
+  accent: string
+  onClose: () => void
+  onEqBand: (band: keyof Eq3, v: number) => void
+  onPeq: (p: PeqSettings) => void
+  onCreateDefaultPeq: () => void
+}) {
+  return (
+    <View style={[s.fxPanel, { borderColor: accent }]}>
+      <View style={s.fxHeader}>
+        <View style={[s.fxBar, { backgroundColor: accent }]} />
+        <Text style={s.fxTitle}>EQ · {channel.name}</Text>
+        <Pressable onPress={onClose} style={s.fxClose}>
+          <Text style={s.fxCloseTxt}>×</Text>
+        </Pressable>
+      </View>
+
+      {channel.lockEq ? (
+        <Text style={s.eqLocked}>EQ bloqueado pelo técnico</Text>
+      ) : (
+        <View style={s.fxBody}>
+          <View style={s.knobsRow}>
+            <Knob
+              value={eq.lowDb}
+              min={-12}
+              max={12}
+              center={0}
+              accent={accent}
+              label="LOW"
+              display={`${eq.lowDb > 0 ? '+' : ''}${eq.lowDb.toFixed(1)} dB`}
+              resetValue={0}
+              onCommit={(v) => onEqBand('lowDb', v)}
+            />
+            <Knob
+              value={eq.midDb}
+              min={-12}
+              max={12}
+              center={0}
+              accent={accent}
+              label="MID"
+              display={`${eq.midDb > 0 ? '+' : ''}${eq.midDb.toFixed(1)} dB`}
+              resetValue={0}
+              onCommit={(v) => onEqBand('midDb', v)}
+            />
+            <Knob
+              value={eq.highDb}
+              min={-12}
+              max={12}
+              center={0}
+              accent={accent}
+              label="HIGH"
+              display={`${eq.highDb > 0 ? '+' : ''}${eq.highDb.toFixed(1)} dB`}
+              resetValue={0}
+              onCommit={(v) => onEqBand('highDb', v)}
+            />
+          </View>
+
+          <View style={s.peqHeader}>
+            <Text style={s.peqHdr}>PEQ • 6 BANDAS</Text>
+            <LedButton
+              label={peq?.enabled ? 'ON' : 'OFF'}
+              color="green"
+              on={Boolean(peq?.enabled)}
+              onPress={() => {
+                const next = peq ? { ...peq, enabled: !peq.enabled } : defaultPeqSettings()
+                onPeq(next)
+              }}
+              width={48}
+            />
+          </View>
+
+          {!peq || !Array.isArray(peq.bands) || peq.bands.length === 0 ? (
+            <Pressable style={s.peqCreateBtn} onPress={onCreateDefaultPeq}>
+              <Text style={s.peqCreateTxt}>Criar PEQ padrão</Text>
+            </Pressable>
+          ) : (
+            <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
+              <View style={s.peqBandsRow}>
+                {peq.bands.slice(0, 6).map((b, bi) => (
+                  <View key={`peq-${bi}`} style={s.peqBandCard}>
+                    <View style={s.peqBandTop}>
+                      <Text style={s.peqBandName}>
+                        {String(b.type).toUpperCase()}
+                      </Text>
+                      <LedButton
+                        label={b.enabled !== false ? 'ON' : 'OFF'}
+                        color="green"
+                        on={b.enabled !== false}
+                        width={36}
+                        onPress={() => {
+                          const bands = peq.bands.slice(0, 6).map((x, j) =>
+                            j === bi ? { ...x, enabled: !(x.enabled !== false) } : x,
+                          )
+                          onPeq({ ...peq, bands })
+                        }}
+                      />
+                    </View>
+                    <View style={s.peqKnobsRow}>
+                      <Knob
+                        value={b.freqHz}
+                        min={20}
+                        max={20000}
+                        accent={accent}
+                        size={36}
+                        label="FREQ"
+                        display={`${Math.round(b.freqHz)} Hz`}
+                        onCommit={(v) => {
+                          const bands = peq.bands.slice(0, 6).map((x, j) =>
+                            j === bi ? { ...x, freqHz: v } : x,
+                          )
+                          onPeq({ ...peq, bands })
+                        }}
+                      />
+                      <Knob
+                        value={b.q}
+                        min={0.1}
+                        max={12}
+                        accent={accent}
+                        size={36}
+                        label="Q"
+                        display={b.q.toFixed(2)}
+                        onCommit={(v) => {
+                          const bands = peq.bands.slice(0, 6).map((x, j) =>
+                            j === bi ? { ...x, q: v } : x,
+                          )
+                          onPeq({ ...peq, bands })
+                        }}
+                      />
+                      <Knob
+                        value={b.gainDb}
+                        min={-24}
+                        max={24}
+                        center={0}
+                        accent={accent}
+                        size={36}
+                        label="GAIN"
+                        display={`${b.gainDb > 0 ? '+' : ''}${b.gainDb.toFixed(1)}`}
+                        resetValue={0}
+                        onCommit={(v) => {
+                          const bands = peq.bands.slice(0, 6).map((x, j) =>
+                            j === bi ? { ...x, gainDb: v } : x,
+                          )
+                          onPeq({ ...peq, bands })
+                        }}
+                      />
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </ScrollView>
+          )}
+        </View>
+      )}
+    </View>
+  )
+}
+
 const s = StyleSheet.create({
   wrap: {
     marginHorizontal: 6,
     marginBottom: 8,
-    borderRadius: 18,
+    borderRadius: consoleRadius.panel + 4,
     borderWidth: 1,
-    borderColor: '#1f2a3a',
-    backgroundColor: '#0a1018',
-    padding: 10,
+    borderColor: consolePalette.borderMetal,
+    backgroundColor: consolePalette.bgChassis,
+    padding: 8,
   },
-  syncWarnBox: {
-    marginBottom: 10,
-    padding: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#9e6a03',
-    backgroundColor: '#342c1d',
-  },
-  syncWarn: { color: '#f0883e', fontSize: 11, lineHeight: 16 },
-  syncWarnCode: { fontFamily: 'monospace', color: '#ffa657' },
-  syncWarnEm: { fontWeight: '700', color: '#ffa657' },
   boxWarn: { paddingHorizontal: 12, paddingBottom: 8 },
-  hint: { color: '#8b949e', paddingHorizontal: 12, paddingBottom: 8 },
-  warn: { color: '#f0883e', fontSize: 12, lineHeight: 18 },
-  bold: { fontWeight: '700', color: '#f0883e' },
+  hint: { color: consolePalette.textMid, paddingHorizontal: 12, paddingBottom: 8 },
+  warn: { color: consolePalette.ledAmber, fontSize: 12, lineHeight: 18 },
+
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 10,
-    paddingHorizontal: 2,
-  },
-  iconBtn: {
-    paddingHorizontal: 10,
+    marginBottom: 8,
+    paddingHorizontal: 4,
     paddingVertical: 6,
-    borderRadius: 10,
+    backgroundColor: consolePalette.bgPanel,
+    borderRadius: consoleRadius.panel,
     borderWidth: 1,
-    borderColor: '#273446',
-    backgroundColor: '#131a26',
+    borderColor: consolePalette.border,
   },
-  iconBtnTxt: { color: '#e6edf3', fontSize: 16, fontWeight: '800' },
+  brandBlock: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  brandLed: {
+    width: 7,
+    height: 7,
+    borderRadius: consoleRadius.led,
+    shadowColor: consolePalette.ledGreen,
+    shadowOpacity: 0.8,
+    shadowRadius: 4,
+  },
+  brandTxt: {
+    color: consolePalette.textMid,
+    fontFamily: consoleType.fontDigit,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
   segment: {
     flexDirection: 'row',
-    backgroundColor: '#0f1621',
-    borderRadius: 999,
+    backgroundColor: consolePalette.bgRecess,
+    borderRadius: consoleRadius.capsule,
     borderWidth: 1,
-    borderColor: '#33445d',
+    borderColor: consolePalette.border,
     overflow: 'hidden',
   },
-  segBtn: { paddingVertical: 8, paddingHorizontal: 17 },
-  segBtnOn: { backgroundColor: '#1e3147' },
-  segTxt: { color: '#8fa1b7', fontSize: 13, fontWeight: '800' },
-  segTxtOn: { color: '#f0f6fc' },
-  topBarRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  powerIcon: { color: '#2ea043', fontSize: 18, fontWeight: '900' },
-  powerLed: {
-    width: 14,
-    height: 14,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: '#30363d',
+  segBtn: { paddingVertical: 6, paddingHorizontal: 12 },
+  segBtnOn: { backgroundColor: consolePalette.bgScribble },
+  segTxt: {
+    color: consolePalette.textMid,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.6,
   },
-  netDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 999,
+  segTxtOn: { color: consolePalette.textHi },
+  topBarRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  led: {
+    width: 8,
+    height: 8,
+    borderRadius: consoleRadius.led,
     borderWidth: 1,
-    borderColor: '#30363d',
+    borderColor: '#1c2531',
+  },
+  ledLbl: {
+    color: consolePalette.textLo,
+    fontFamily: consoleType.fontDigit,
+    fontSize: 8,
+    fontWeight: '800',
+    marginRight: 4,
+    letterSpacing: 0.6,
   },
   netHint: {
-    color: '#9ab0c8',
-    fontSize: 11,
-    lineHeight: 16,
-    marginBottom: 10,
-    paddingHorizontal: 2,
+    color: consolePalette.textMid,
+    fontSize: 10,
+    lineHeight: 14,
+    marginBottom: 8,
+    paddingHorizontal: 4,
   },
-  listScroll: { maxHeight: 450 },
+
+  bankRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingHorizontal: 2,
+    paddingBottom: 8,
+  },
+  bankBtn: {
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: consoleRadius.strip,
+    borderWidth: 1,
+    borderColor: consolePalette.border,
+    backgroundColor: consolePalette.bgRecess,
+  },
+  bankBtnOn: {
+    borderColor: consolePalette.ledBlue,
+    backgroundColor: consolePalette.ledBlueDim,
+  },
+  bankTxt: {
+    color: consolePalette.textMid,
+    fontFamily: consoleType.fontDigit,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  bankTxtOn: { color: consolePalette.textHi },
+
+  stripsScroll: {
+    backgroundColor: consolePalette.bgRecess,
+    borderRadius: consoleRadius.panel,
+    borderWidth: 1,
+    borderColor: consolePalette.border,
+  },
+  stripsRow: {
+    flexDirection: 'row',
+    gap: consoleSpacing.stripGap,
+    padding: 6,
+  },
+
+  overviewScroll: {
+    backgroundColor: consolePalette.bgRecess,
+    borderRadius: consoleRadius.panel,
+    borderWidth: 1,
+    borderColor: consolePalette.border,
+    maxHeight: 360,
+  },
+  overviewGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    padding: 6,
+  },
+  miniStrip: {
+    width: 60,
+    backgroundColor: consolePalette.bgPanel,
+    borderRadius: consoleRadius.strip,
+    borderWidth: 1,
+    overflow: 'hidden',
+    alignItems: 'stretch',
+  },
+  miniBar: { paddingVertical: 2, alignItems: 'center' },
+  miniNum: {
+    color: consolePalette.textOnAccent,
+    fontFamily: consoleType.fontDigit,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  miniName: {
+    color: consolePalette.textHi,
+    fontFamily: consoleType.fontScribble,
+    fontSize: 9,
+    fontWeight: '700',
+    paddingHorizontal: 3,
+    paddingVertical: 3,
+    minHeight: 20,
+    textAlign: 'center',
+  },
+  miniMeterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 3,
+    paddingVertical: 3,
+    justifyContent: 'space-between',
+  },
+  miniVol: {
+    fontFamily: consoleType.fontDigit,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+
+  listScroll: {
+    maxHeight: 380,
+    backgroundColor: consolePalette.bgRecess,
+    borderRadius: consoleRadius.panel,
+    borderWidth: 1,
+    borderColor: consolePalette.border,
+    padding: 6,
+  },
   groupsEmpty: {
-    color: '#8b949e',
+    color: consolePalette.textMid,
     fontSize: 12,
     lineHeight: 18,
     padding: 12,
   },
   groupCard: {
-    backgroundColor: '#101722',
-    borderRadius: 16,
+    backgroundColor: consolePalette.bgPanel,
+    borderRadius: consoleRadius.panel,
     borderWidth: 1,
-    borderColor: '#6e40c9',
-    padding: 12,
-    marginBottom: 10,
+    borderColor: consolePalette.border,
+    borderLeftWidth: 4,
+    borderLeftColor: consolePalette.ledBlue,
+    padding: 10,
+    marginBottom: 8,
   },
   rowTop: {
     flexDirection: 'row',
@@ -704,128 +1034,155 @@ const s = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 6,
   },
-  groupTitle: { color: '#e6edf3', fontSize: 15, fontWeight: '800' },
+  groupTitle: {
+    color: consolePalette.textHi,
+    fontFamily: consoleType.fontScribble,
+    fontSize: 13,
+    fontWeight: '800',
+  },
   volPill: {
-    color: '#d2a8ff',
-    fontSize: 12,
-    fontWeight: '700',
+    color: consolePalette.ledBlue,
+    fontFamily: consoleType.fontDigit,
+    fontSize: 11,
+    fontWeight: '900',
     fontVariant: ['tabular-nums'],
   },
   rowActions: { flexDirection: 'row', marginTop: 8, gap: 8 },
-  channelCard: {
-    backgroundColor: '#0f151f',
-    borderRadius: 16,
+
+  fxPanel: {
+    marginTop: 8,
+    backgroundColor: consolePalette.bgPanel,
+    borderRadius: consoleRadius.panel,
     borderWidth: 1,
-    borderColor: '#223143',
-    borderLeftWidth: 3,
-    padding: 11,
-    marginBottom: 11,
+    padding: 10,
   },
-  channelRow: {
+  fxHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    marginBottom: 10,
   },
-  channelLeft: {
+  fxBar: { width: 6, height: 18, borderRadius: 2 },
+  fxTitle: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    minWidth: 0,
-  },
-  chNum: {
-    color: '#90a4bb',
-    fontSize: 11,
+    color: consolePalette.textHi,
+    fontFamily: consoleType.fontScribble,
+    fontSize: 13,
     fontWeight: '800',
-    width: 22,
-    fontVariant: ['tabular-nums'],
+    letterSpacing: 0.5,
   },
-  chIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
+  fxClose: {
+    width: 26,
+    height: 26,
+    borderRadius: consoleRadius.led,
+    backgroundColor: consolePalette.bgRecess,
+    borderWidth: 1,
+    borderColor: consolePalette.border,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#212c3b',
   },
-  chIconTxt: { color: '#081018', fontWeight: '900', fontSize: 11 },
-  chTitles: { flex: 1, minWidth: 0 },
-  chName: { color: '#f0f6fc', fontSize: 14, fontWeight: '800' },
-  chMeta: { flexDirection: 'row', marginTop: 2 },
-  gBadge: { fontSize: 11, fontWeight: '800' },
-  gBadgeMuted: { color: '#484f58', fontSize: 11 },
-  msFx: { flexDirection: 'row', gap: 4 },
-  msBtn: {
-    minWidth: 32,
+  fxCloseTxt: {
+    color: consolePalette.textHi,
+    fontSize: 18,
+    lineHeight: 18,
+    fontWeight: '900',
+  },
+  fxBody: { gap: 10 },
+  knobsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
     paddingVertical: 6,
-    paddingHorizontal: 4,
-    borderRadius: 8,
-    backgroundColor: '#1a2331',
+    backgroundColor: consolePalette.bgRecess,
+    borderRadius: consoleRadius.strip,
     borderWidth: 1,
-    borderColor: '#30363d',
-    alignItems: 'center',
+    borderColor: consolePalette.border,
   },
-  msBtnOn: { borderColor: '#f85149', backgroundColor: '#372325' },
-  msBtnDisabled: { opacity: 0.45 },
-  msBtnTxt: { color: '#e6edf3', fontSize: 12, fontWeight: '900' },
-  msBtnTxtDim: { color: '#6e7681', fontSize: 12, fontWeight: '800' },
-  faderCol: { width: 144 },
-  volReadout: {
-    fontSize: 11,
-    fontWeight: '800',
-    marginTop: 4,
-    textAlign: 'center',
-    fontVariant: ['tabular-nums'],
-  },
-  panRow: {
+  peqHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 9,
-    paddingTop: 6,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#21262d',
+    alignItems: 'center',
+    paddingTop: 4,
   },
-  panLbl: { color: '#8ea1b7', fontSize: 10 },
-  panVal: { fontSize: 12, fontWeight: '800' },
-  eqLocked: { color: '#8b949e', fontSize: 11, marginTop: 8 },
-  eqBlock: {
-    marginTop: 10,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: '#21262d',
-    backgroundColor: '#0b1018',
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingBottom: 6,
-  },
-  eqHdrSm: {
-    color: '#79c0ff',
+  peqHdr: {
+    color: consolePalette.textMid,
+    fontFamily: consoleType.fontDigit,
     fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  peqCreateBtn: {
+    paddingVertical: 10,
+    borderRadius: consoleRadius.strip,
+    borderWidth: 1,
+    borderColor: consolePalette.borderHi,
+    backgroundColor: consolePalette.ledBlueDim,
+    alignItems: 'center',
+  },
+  peqCreateTxt: {
+    color: consolePalette.textHi,
+    fontSize: 12,
     fontWeight: '800',
-    marginBottom: 6,
   },
-  eqRowSm: { marginBottom: 6 },
-  eqLblSm: {
-    color: '#98a6bc',
-    fontSize: 10,
-    marginBottom: 2,
-    fontWeight: '700',
+  peqBandsRow: { flexDirection: 'row', gap: 6, paddingVertical: 4 },
+  peqBandCard: {
+    width: 142,
+    borderWidth: 1,
+    borderColor: consolePalette.border,
+    borderRadius: consoleRadius.strip,
+    padding: 8,
+    backgroundColor: consolePalette.bgRecess,
   },
-  masterRow: {
+  peqBandTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  peqBandName: {
+    color: consolePalette.textHi,
+    fontFamily: consoleType.fontDigit,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  peqKnobsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 4,
+  },
+
+  eqLocked: {
+    color: consolePalette.textMid,
+    fontSize: 11,
+    paddingVertical: 8,
+    textAlign: 'center',
+  },
+
+  masterBar: {
+    marginTop: 10,
+    paddingTop: 10,
+    paddingHorizontal: 10,
+    paddingBottom: 14,
+    backgroundColor: consolePalette.bgPanel,
+    borderRadius: consoleRadius.panel,
+    borderWidth: 1,
+    borderColor: consolePalette.borderHi,
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 14,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#21262d',
     gap: 12,
   },
+  masterLabelCol: { width: 90 },
   masterLbl: {
-    color: '#58a6ff',
-    fontSize: 13,
+    color: consolePalette.ledBlue,
+    fontFamily: consoleType.fontDigit,
+    fontSize: 14,
     fontWeight: '900',
-    width: 72,
+    letterSpacing: 1.2,
   },
-  masterFader: { height: 210 },
+  masterSub: {
+    color: consolePalette.textLo,
+    fontFamily: consoleType.fontUi,
+    fontSize: 9,
+    letterSpacing: 0.8,
+  },
+  masterFader: { flex: 1, height: 140 },
 })

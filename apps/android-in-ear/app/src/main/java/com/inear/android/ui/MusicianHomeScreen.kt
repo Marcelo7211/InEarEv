@@ -58,6 +58,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.inear.android.net.ChannelStrip
 import com.inear.android.net.GroupBus
@@ -106,11 +107,15 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
     var playing by remember { mutableStateOf(false) }
     var previousLatencyKey by remember { mutableStateOf<String?>(null) }
     var showRetornoStatus by remember { mutableStateOf(false) }
+    /** Canal cujo FX dialog está aberto (null = fechado). */
+    var fxOpenChannelId by remember { mutableStateOf<String?>(null) }
 
+    // Sync com o admin: refresh rápido enquanto playing (e mesmo idle); o ViewModel
+    // ignora updates locais quando o usuário está com gestos ativos (via fxLocalBoostUntil).
     LaunchedEffect(playing) {
         while (true) {
             vm.refreshShowfile()
-            delay(if (playing) 1500 else 4500)
+            delay(if (playing) 700L else 2500L)
         }
     }
 
@@ -378,10 +383,10 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                     val ch = channelById[cid] ?: continue
                     val send = (m.sendGains[cid] ?: 1.0).toFloat()
                     val muted = m.sendMutes?.get(cid) == true
-                    val ear = m.eqByChannel?.get(cid)
-                    val low = (ear?.lowDb ?: ch.eq.lowDb).toFloat()
-                    val mid = (ear?.midDb ?: ch.eq.midDb).toFloat()
-                    val high = (ear?.highDb ?: ch.eq.highDb).toFloat()
+                    val peqForCh = m.peqByChannel?.get(cid)
+                    val peqOn =
+                        peqForCh?.enabled == true && (peqForCh.bands.isNotEmpty())
+                    val byp = m.fxBypassByChannel?.get(cid) == true
                     MixerStripCard(
                         channel = ch,
                         title = ch.name,
@@ -392,12 +397,49 @@ fun MusicianHomeScreen(vm: InEarViewModel) {
                         muted = muted,
                         onToggleMute = { vm.patchSendMute(m.id, cid, !muted) },
                         onGainCommit = { vm.patchSendGain(m.id, cid, it) },
-                        eq = if (ch.lockEq) null else Triple(low, mid, high),
-                        onEqChange = { l, md, h -> vm.patchEqBand(m.id, cid, l.toDouble(), md.toDouble(), h.toDouble()) },
+                        peqEnabled = peqOn,
+                        bypassed = byp,
+                        onOpenFx = { fxOpenChannelId = cid },
+                        onToggleBypass = { vm.patchFxBypass(cid, !byp) },
                         eqLocked = ch.lockEq,
                     )
                 }
             }
+
+            // FX DIALOG (PEQ gráfico + Comp/Delay/Reverb accordions + Bypass).
+            val openCid = fxOpenChannelId
+            val openCh = openCid?.let { channelById[it] }
+            FxDialog(
+                visible = openCid != null && openCh != null,
+                channelName = openCh?.name ?: "",
+                channelId = openCid ?: "",
+                accent = channelAccentColor(
+                    openCh?.id ?: "",
+                    openCh?.color,
+                    openCh?.captureInputIndex,
+                ),
+                peq = openCid?.let { m.peqByChannel?.get(it) },
+                comp = m.masterComp,
+                delay = m.masterDelay,
+                reverb = m.masterReverb,
+                bypassed = openCid?.let { m.fxBypassByChannel?.get(it) } == true,
+                onClose = { fxOpenChannelId = null },
+                onPeqCommit = { next ->
+                    val cid = openCid ?: return@FxDialog
+                    vm.patchPeq(cid, next)
+                },
+                onCompCommit = { vm.patchMasterComp(it) },
+                onDelayCommit = { vm.patchMasterDelay(it) },
+                onReverbCommit = { vm.patchMasterReverb(it) },
+                onToggleBypass = { next ->
+                    val cid = openCid ?: return@FxDialog
+                    vm.patchFxBypass(cid, next)
+                },
+                onCreateDefaultPeq = {
+                    val cid = openCid ?: return@FxDialog
+                    vm.patchPeq(cid, defaultPeqSettings())
+                },
+            )
         }
     }
 }
@@ -413,8 +455,11 @@ private fun MixerStripCard(
     muted: Boolean,
     onToggleMute: () -> Unit,
     onGainCommit: (Float) -> Unit,
-    eq: Triple<Float, Float, Float>? = null,
-    onEqChange: ((Float, Float, Float) -> Unit)? = null,
+    /** Quando dado, mostra coluna FX com EQ + BYP. */
+    peqEnabled: Boolean = false,
+    bypassed: Boolean = false,
+    onOpenFx: (() -> Unit)? = null,
+    onToggleBypass: (() -> Unit)? = null,
     eqLocked: Boolean = false,
 ) {
     val accent = channelAccentColor(channel?.id ?: title, channel?.color, channel?.captureInputIndex)
@@ -570,26 +615,31 @@ private fun MixerStripCard(
                     onCommit = onGainCommit,
                     modifier = Modifier.weight(1f).fillMaxHeight(),
                 )
-                if (eq != null && onEqChange != null) {
-                    EqMiniKnobs(
-                        low = eq.first,
-                        mid = eq.second,
-                        high = eq.third,
-                        onChange = onEqChange,
-                        modifier = Modifier.width(52.dp).fillMaxHeight(),
-                    )
-                } else if (eqLocked) {
+                if (eqLocked) {
                     Box(
                         modifier =
                             Modifier
-                                .width(52.dp)
+                                .width(48.dp)
                                 .fillMaxHeight()
-                                .border(1.dp, Color(0xFF3c5068), RoundedCornerShape(10.dp))
-                                .background(Color(0xFF101923), RoundedCornerShape(10.dp)),
+                                .border(1.dp, Color(0xFF3c5068), RoundedCornerShape(8.dp))
+                                .background(Color(0xFF101923), RoundedCornerShape(8.dp)),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text("EQ\nLOCK", style = MaterialTheme.typography.labelSmall, color = Color(0xFF8b949e))
                     }
+                } else if (onOpenFx != null && onToggleBypass != null) {
+                    FxButtonsCol(
+                        accent = channelAccentColor(
+                            channel?.id ?: title,
+                            channel?.color,
+                            channel?.captureInputIndex,
+                        ),
+                        peqEnabled = peqEnabled,
+                        bypassed = bypassed,
+                        onOpenFx = onOpenFx,
+                        onToggleBypass = onToggleBypass,
+                        modifier = Modifier.width(48.dp).fillMaxHeight(),
+                    )
                 }
             }
         }
@@ -669,6 +719,84 @@ private fun ReturnStatusDialog(
                 )
             }
         }
+    }
+}
+
+/**
+ * Coluna slim com dois switches verticais (EQ + BYP) ao lado do fader.
+ * - EQ aceso (cor do canal) quando PEQ está ON.
+ * - BYP aceso (âmbar) quando bypass está ativo.
+ */
+@Composable
+private fun FxButtonsCol(
+    accent: Color,
+    peqEnabled: Boolean,
+    bypassed: Boolean,
+    onOpenFx: () -> Unit,
+    onToggleBypass: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        FxSlimSwitch(
+            label = "EQ",
+            on = peqEnabled,
+            color = accent,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            onClick = onOpenFx,
+        )
+        FxSlimSwitch(
+            label = "BYP",
+            on = bypassed,
+            color = Color(0xFFffb020),
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            onClick = onToggleBypass,
+        )
+    }
+}
+
+@Composable
+private fun FxSlimSwitch(
+    label: String,
+    on: Boolean,
+    color: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val borderColor = if (on) color else Color(0xFF1e2a3c)
+    val bg = if (on) {
+        Brush.verticalGradient(listOf(color.copy(alpha = 0.18f), Color(0xFF070b13)))
+    } else {
+        Brush.verticalGradient(listOf(Color(0xFF0c1320), Color(0xFF070b13)))
+    }
+    val txtColor = if (on) color else Color(0xFF9caec6)
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(6.dp))
+            .background(bg)
+            .clickable { onClick() }
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+            Text(
+                label,
+                color = txtColor,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Black,
+                fontFamily = FontFamily.Monospace,
+            )
+        }
+        Box(
+            modifier = Modifier
+                .padding(top = 2.dp)
+                .size(6.dp)
+                .background(if (on) color else Color(0xFF1c2531), CircleShape),
+        )
     }
 }
 

@@ -20,6 +20,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import com.inear.android.net.CompressorSettings
+import com.inear.android.net.DelaySettings
+import com.inear.android.net.PeqSettings
+import com.inear.android.net.ReverbSettings
+import com.inear.android.net.apiJson
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -184,6 +190,58 @@ class InEarViewModel(application: Application) : AndroidViewModel(application) {
                 _error.value = e.message
             }
         }
+    }
+
+    /** Helper genérico: serializa qualquer body como JSON e faz PATCH /api/showfile/musician/:id */
+    private fun patchMusicianGeneric(body: JsonObject) {
+        val s = _session.value
+        val m = selfMusician() ?: return
+        if (s.token.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                val next = repository.patchMusician(s.apiBase, s.token, m.id, body)
+                patchMusicianMerge(next)
+            } catch (e: Exception) {
+                _error.value = e.message
+            }
+        }
+    }
+
+    fun patchPeq(channelId: String, peq: PeqSettings) {
+        val body = buildJsonObject {
+            put(
+                "peqByChannel",
+                buildJsonObject {
+                    put(channelId, apiJson.encodeToJsonElement(PeqSettings.serializer(), peq))
+                },
+            )
+        }
+        patchMusicianGeneric(body)
+    }
+
+    fun patchFxBypass(channelId: String, bypassed: Boolean) {
+        val body = buildJsonObject {
+            put("fxBypassByChannel", buildJsonObject { put(channelId, bypassed) })
+        }
+        patchMusicianGeneric(body)
+    }
+
+    fun patchMasterComp(comp: CompressorSettings) {
+        patchMusicianGeneric(buildJsonObject {
+            put("masterComp", apiJson.encodeToJsonElement(CompressorSettings.serializer(), comp))
+        })
+    }
+
+    fun patchMasterDelay(delay: DelaySettings) {
+        patchMusicianGeneric(buildJsonObject {
+            put("masterDelay", apiJson.encodeToJsonElement(DelaySettings.serializer(), delay))
+        })
+    }
+
+    fun patchMasterReverb(reverb: ReverbSettings) {
+        patchMusicianGeneric(buildJsonObject {
+            put("masterReverb", apiJson.encodeToJsonElement(ReverbSettings.serializer(), reverb))
+        })
     }
 
     fun startRetorno() {

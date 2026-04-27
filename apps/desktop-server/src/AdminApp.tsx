@@ -419,25 +419,9 @@ export function AdminApp() {
           <div style={{ position: 'relative', zIndex: 1 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: 22, flexWrap: 'wrap' }}>
               <div>
-                <div
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    borderRadius: 999,
-                    border: '1px solid rgba(90,162,255,.28)',
-                    background: 'rgba(12,18,28,.8)',
-                    padding: '5px 12px',
-                    color: '#8ab4ff',
-                    fontSize: 12,
-                    fontWeight: 800,
-                    letterSpacing: '.12em',
-                    textTransform: 'uppercase',
-                    marginBottom: 12,
-                  }}
-                >
-                  <span style={{ width: 8, height: 8, borderRadius: 999, background: '#2ea043', boxShadow: '0 0 10px rgba(46,160,67,.7)' }} />
-                  Console Tecnico
+                <div className="console-brand" style={{ marginBottom: 12 }}>
+                  <span className="console-led console-led--green" />
+                  <span className="console-brand__txt">STAGE · MIX · TECH</span>
                 </div>
                 <h1 style={{ margin: 0, fontSize: 34, letterSpacing: '.03em' }}>inEar Desktop</h1>
                 <p style={{ margin: '8px 0 0', color: '#9aa0a6', maxWidth: 420 }}>
@@ -593,12 +577,11 @@ export function AdminApp() {
       padding: 12,
       border: '1px solid rgba(71,97,128,.55)',
       borderRadius: 20,
-      background: 'linear-gradient(180deg,rgba(15,23,34,.95) 0%,rgba(12,18,28,.95) 100%)',
+      background: 'linear-gradient(180deg,#0f1722 0%,#0c1118 100%)',
       boxShadow: 'inset 0 1px 0 rgba(255,255,255,.04), 0 10px 24px rgba(0,0,0,.18)',
       position: 'sticky' as const,
       top: 12,
       zIndex: 5,
-      backdropFilter: 'blur(12px)',
     },
     tabBtn: {
       fontWeight: 600,
@@ -610,6 +593,9 @@ export function AdminApp() {
       letterSpacing: '.04em',
       textTransform: 'uppercase' as const,
       fontSize: 11,
+      cursor: 'pointer' as const,
+      touchAction: 'manipulation' as const,
+      userSelect: 'none' as const,
     },
     tabBtnActive: {
       fontWeight: 800,
@@ -626,6 +612,9 @@ export function AdminApp() {
       padding: '9px 15px',
       fontWeight: 700,
       boxShadow: 'inset 0 1px 0 rgba(255,255,255,.05)',
+      cursor: 'pointer' as const,
+      touchAction: 'manipulation' as const,
+      userSelect: 'none' as const,
     },
     panelCard: {
       border: '1px solid rgba(67,94,123,.7)',
@@ -652,33 +641,14 @@ export function AdminApp() {
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <h1 style={{ margin: 0 }}>inEar Console</h1>
-              <span
-                style={{
-                  borderRadius: 999,
-                  border: '1px solid #2ea043',
-                  color: '#9be9a8',
-                  fontSize: 11,
-                  fontWeight: 800,
-                  padding: '4px 10px',
-                  letterSpacing: '.1em',
-                }}
-              >
-                LIVE MIX
-              </span>
-              <span
-                style={{
-                  borderRadius: 999,
-                  border: '1px solid rgba(95,121,152,.75)',
-                  color: '#9ab8d8',
-                  fontSize: 11,
-                  fontWeight: 700,
-                  padding: '4px 10px',
-                  letterSpacing: '.06em',
-                  textTransform: 'uppercase',
-                }}
-              >
-                {role}
-              </span>
+              <div className="console-brand">
+                <span className="console-led console-led--green" />
+                <span className="console-brand__txt">LIVE MIX</span>
+              </div>
+              <div className="console-brand">
+                <span className="console-led console-led--blue" />
+                <span className="console-brand__txt">{String(role).toUpperCase()}</span>
+              </div>
             </div>
             <p style={{ margin: '8px 0 0', color: '#9aa0a6' }}>
               Visual tecnico para controle rapido de palco, roteamento e retorno em tempo real.
@@ -718,60 +688,106 @@ export function AdminApp() {
       </header>
       <style>{`
         .inearRange{
-          -webkit-appearance:none;appearance:none;width:100%;height:22px;background:transparent;cursor:pointer;
+          -webkit-appearance:none;appearance:none;width:100%;height:24px;background:transparent;cursor:pointer;
         }
         .inearRange::-webkit-slider-runnable-track{
-          height:7px;border-radius:999px;background:linear-gradient(90deg,#2ea043 0 var(--fill,50%),#18222f var(--fill,50%) 100%);border:1px solid #425670;
+          height:6px;border-radius:2px;
+          background:linear-gradient(90deg,
+            color-mix(in srgb, var(--ch-accent,#39ff14) 90%, #fff) 0,
+            var(--ch-accent,#39ff14) var(--fill,50%),
+            #0a131e var(--fill,50%) 100%);
+          border:1px solid #1e2a3c;
+          box-shadow:inset 0 1px 0 rgba(255,255,255,.06), inset 0 -1px 0 rgba(0,0,0,.6);
         }
         .inearRange::-webkit-slider-thumb{
-          -webkit-appearance:none;appearance:none;margin-top:-7px;width:16px;height:24px;border-radius:4px;
-          border:1px solid #8da7c7;background:linear-gradient(180deg,#fbfcff 0%,#9ab6d6 45%,#4b627f 100%);
-          box-shadow:0 0 0 2px rgba(47,129,247,.18),0 4px 10px rgba(0,0,0,.35);
+          -webkit-appearance:none;appearance:none;margin-top:-9px;width:14px;height:24px;border-radius:3px;
+          border:1px solid #232a36;
+          background:linear-gradient(180deg,#fbfcff 0%, #d2d8e2 30%, #8e96a4 55%, #4b525e 90%);
+          box-shadow:
+            0 0 0 1px rgba(0,0,0,.5),
+            0 4px 10px rgba(0,0,0,.55);
         }
         .inearRange::-moz-range-track{
-          height:7px;border-radius:999px;background:linear-gradient(90deg,#2ea043 0 var(--fill,50%),#18222f var(--fill,50%) 100%);border:1px solid #425670;
+          height:6px;border-radius:2px;
+          background:linear-gradient(90deg,
+            color-mix(in srgb, var(--ch-accent,#39ff14) 90%, #fff) 0,
+            var(--ch-accent,#39ff14) var(--fill,50%),
+            #0a131e var(--fill,50%) 100%);
+          border:1px solid #1e2a3c;
         }
         .inearRange::-moz-range-thumb{
-          width:16px;height:24px;border-radius:4px;border:1px solid #8da7c7;
-          background:linear-gradient(180deg,#fbfcff 0%,#9ab6d6 45%,#4b627f 100%);
-          box-shadow:0 0 0 2px rgba(47,129,247,.18),0 4px 10px rgba(0,0,0,.35);
+          width:14px;height:24px;border-radius:3px;border:1px solid #232a36;
+          background:linear-gradient(180deg,#fbfcff 0%, #d2d8e2 30%, #8e96a4 55%, #4b525e 90%);
+          box-shadow:0 0 0 1px rgba(0,0,0,.5), 0 4px 10px rgba(0,0,0,.55);
         }
         .inearVRange{
-          -webkit-appearance:none;appearance:none;width:var(--faderLen,163px);height:26px;background:transparent;cursor:pointer;
+          -webkit-appearance:none;appearance:none;width:var(--faderLen,163px);height:34px;background:transparent;cursor:pointer;
         }
         .inearVRange::-webkit-slider-runnable-track{
-          height:9px;border-radius:999px;background:linear-gradient(90deg,#2ea043 0 var(--fill,50%),#18222f var(--fill,50%) 100%);border:1px solid #425670;
+          height:6px;border-radius:2px;
+          background:linear-gradient(90deg,
+            color-mix(in srgb, var(--ch-accent,#39ff14) 90%, #fff) 0,
+            var(--ch-accent,#39ff14) var(--fill,50%),
+            #0a131e var(--fill,50%) 100%);
+          border:1px solid #1e2a3c;
+          box-shadow:inset 0 1px 0 rgba(255,255,255,.06), inset 0 -1px 0 rgba(0,0,0,.6);
         }
         .inearVRange::-webkit-slider-thumb{
-          -webkit-appearance:none;appearance:none;margin-top:-8px;width:21px;height:29px;border-radius:5px;
-          border:1px solid #8da7c7;background:linear-gradient(180deg,#fbfcff 0%,#9ab6d6 45%,#4b627f 100%);
-          box-shadow:0 0 0 2px rgba(47,129,247,.18),0 4px 10px rgba(0,0,0,.35);
+          -webkit-appearance:none;appearance:none;margin-top:-13px;width:14px;height:32px;border-radius:3px;
+          border:1px solid #232a36;
+          background:
+            linear-gradient(180deg,#fbfcff 0%, #d2d8e2 30%, #8e96a4 55%, #4b525e 90%);
+          box-shadow:
+            0 0 0 1px rgba(0,0,0,.5),
+            0 1px 0 rgba(255,255,255,.6) inset,
+            0 -2px 0 rgba(0,0,0,.4) inset,
+            0 6px 14px rgba(0,0,0,.55);
+          position:relative;
         }
         .inearVRange::-moz-range-track{
-          height:9px;border-radius:999px;background:linear-gradient(90deg,#2ea043 0 var(--fill,50%),#18222f var(--fill,50%) 100%);border:1px solid #425670;
+          height:6px;border-radius:2px;
+          background:linear-gradient(90deg,
+            color-mix(in srgb, var(--ch-accent,#39ff14) 90%, #fff) 0,
+            var(--ch-accent,#39ff14) var(--fill,50%),
+            #0a131e var(--fill,50%) 100%);
+          border:1px solid #1e2a3c;
         }
         .inearVRange::-moz-range-thumb{
-          width:21px;height:29px;border-radius:5px;border:1px solid #8da7c7;
-          background:linear-gradient(180deg,#fbfcff 0%,#9ab6d6 45%,#4b627f 100%);
-          box-shadow:0 0 0 2px rgba(47,129,247,.18),0 4px 10px rgba(0,0,0,.35);
+          width:14px;height:32px;border-radius:3px;border:1px solid #232a36;
+          background:linear-gradient(180deg,#fbfcff 0%, #d2d8e2 30%, #8e96a4 55%, #4b525e 90%);
+          box-shadow:0 0 0 1px rgba(0,0,0,.5), 0 6px 14px rgba(0,0,0,.55);
         }
         .volCard{
           width:100%;max-width:96px;margin:0;overflow:hidden;
           display:flex;flex-direction:column;align-items:center;justify-content:flex-start;height:100%;
-          background:#303030;color:rgba(255,255,255,.92);
-          border:1px solid #3f4f66;border-radius:6px;padding:5px 3px 6px;
-          box-shadow:inset 0 0 4px rgba(0,0,0,.75),0 8px 18px rgba(0,0,0,.3);
+          background:linear-gradient(180deg,#0c1320 0%,#070b13 100%);
+          color:rgba(255,255,255,.92);
+          border:1px solid #1e2a3c;border-top:2px solid color-mix(in srgb, var(--ch-accent,#58a6ff) 80%, #000);
+          border-radius:6px;padding:5px 3px 6px;
+          box-shadow:
+            inset 0 0 0 1px rgba(255,255,255,.02),
+            inset 0 0 14px rgba(0,0,0,.7),
+            0 8px 18px rgba(0,0,0,.45);
         }
         .volCard__title{
-          font-size:9px;color:#dbe6f3;font-weight:800;text-align:center;margin-bottom:3px;width:100%;
+          font-size:8px;color:#9caec6;font-weight:900;text-align:center;margin-bottom:3px;width:100%;
+          letter-spacing:.16em;text-transform:uppercase;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
         }
         .volCard__db{
           display:flex;justify-content:center;margin:0 0 5px;width:100%;
         }
         .volCard__db span{
-          width:100%;max-width:100%;padding:.12rem .25rem;border-radius:2px;color:#2af02a;background:#202020;
-          box-shadow:inset 0 0 3px 2px rgba(0,0,0,.5);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-          text-align:center;font-size:9px;letter-spacing:.02em;box-sizing:border-box;
+          width:100%;max-width:100%;padding:.18rem .25rem;border-radius:3px;
+          color:var(--ch-accent,#39ff14);
+          background:#040608;
+          border:1px solid #11202d;
+          box-shadow:
+            inset 0 0 4px rgba(0,0,0,.85),
+            inset 0 0 8px color-mix(in srgb, var(--ch-accent,#39ff14) 14%, transparent);
+          font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+          text-align:center;font-size:9px;letter-spacing:.06em;box-sizing:border-box;
+          font-weight:800;
+          text-shadow:0 0 4px color-mix(in srgb, var(--ch-accent,#39ff14) 60%, transparent);
         }
         .volCard__row{
           flex:1;min-height:0;width:100%;display:flex;justify-content:center;align-items:stretch;padding:5px 0 2px;
@@ -782,37 +798,56 @@ export function AdminApp() {
         }
         .volCard__vuFrame{
           flex:1;display:flex;flex-direction:column;align-items:center;min-width:0;width:100%;
-          padding:4px 2px;border-radius:5px;border:1px solid #2f3f55;
-          background:linear-gradient(180deg,#0f141c 0%,#0b1016 100%);
-          box-shadow:inset 0 0 6px rgba(0,0,0,.55);
+          padding:4px 2px;border-radius:5px;border:1px solid #182536;
+          background:linear-gradient(180deg,#070b11 0%,#03060a 100%);
+          box-shadow:inset 0 0 8px rgba(0,0,0,.85);
         }
         .volCard__vuLabel{
-          font-size:7px;font-weight:800;letter-spacing:.1em;color:#7f93ab;margin-bottom:3px;
+          font-size:7px;font-weight:900;letter-spacing:.16em;color:#5b6a82;margin-bottom:3px;
+          font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
         }
         .volCard__vuMeterRow{
           flex:1;display:flex;align-items:stretch;justify-content:center;width:100%;min-height:0;gap:2px;
         }
         .volCard__vuMeter{
-          flex:0 0 13px;width:13px;max-width:17px;border-radius:4px;
-          background:linear-gradient(-180deg,#f40000 0%,#ec9500 10%,#bade09 18%,#429321 45%);
+          flex:0 0 13px;width:13px;max-width:17px;border-radius:2px;
+          background:
+            repeating-linear-gradient(0deg,
+              transparent 0,
+              transparent 2px,
+              rgba(0,0,0,.78) 2px,
+              rgba(0,0,0,.78) 3px),
+            linear-gradient(180deg,#ff3b3b 0%,#ff3b3b 8%,#ffb020 9%,#ffb020 22%,#39ff14 23%,#39ff14 100%);
           -webkit-mask:linear-gradient(to bottom,transparent 0,transparent calc(100% - var(--vuFill,0%)),#000 calc(100% - var(--vuFill,0%)),#000 100%);
           mask:linear-gradient(to bottom,transparent 0,transparent calc(100% - var(--vuFill,0%)),#000 calc(100% - var(--vuFill,0%)),#000 100%);
-          box-shadow:inset 0 0 3px rgba(0,0,0,.45);
+          box-shadow:inset 0 0 3px rgba(0,0,0,.55), 0 0 4px rgba(57,255,20,.18);
         }
         .volCard__marks{
           display:flex;flex-flow:column nowrap;justify-content:space-between;height:100%;
-          font-size:.4rem;color:#808080;line-height:1;text-align:right;min-width:0;flex:1 1 auto;
+          font-size:.42rem;color:#5b6a82;line-height:1;text-align:right;min-width:0;flex:1 1 auto;
+          font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:700;
         }
         .volCard__fader{
           flex:0 0 36px;width:36px;min-width:36px;min-height:0;height:100%;
           display:flex;align-items:center;justify-content:center;position:relative;
-          margin-left:14px;overflow:visible;box-sizing:border-box;
+          margin-left:12px;overflow:visible;box-sizing:border-box;
+        }
+        .volCard__fader:before{
+          content:"";position:absolute;left:50%;top:6%;width:18px;height:88%;
+          transform:translateX(-50%);
+          background:
+            linear-gradient(90deg, rgba(0,0,0,.7) 0%, rgba(255,255,255,.04) 50%, rgba(0,0,0,.7) 100%),
+            linear-gradient(180deg,#0a0d12 0%, #060810 100%);
+          border-radius:3px;
+          border:1px solid #1a2536;
+          box-shadow:
+            inset 0 1px 0 rgba(255,255,255,.05),
+            inset 0 0 6px rgba(0,0,0,.85);
         }
         .volCard__fader:after{
-          content:"";position:absolute;left:50%;top:0;width:4px;height:100%;
+          content:"";position:absolute;left:50%;top:8%;width:1px;height:84%;
           transform:translateX(-50%);
-          background:#121212;border-radius:999px;
-          box-shadow:inset 0 0 2px rgba(255,255,255,.06);
+          background:linear-gradient(180deg, transparent 0%, rgba(255,255,255,.06) 50%, transparent 100%);
         }
         .mixerHStrip{
           border:1px solid #334861;border-radius:12px;padding:10px;background:#111926;margin-bottom:12px;
@@ -835,10 +870,11 @@ export function AdminApp() {
           min-width:52px;color:#9ab8d8;font-size:11px;font-weight:700;
         }
         .faderMarks{
-          display:flex;justify-content:space-between;gap:8px;margin-top:5px;padding:0 2px;
-          color:#7f93ab;font-size:10px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+          display:flex;justify-content:space-between;gap:6px;margin-top:5px;padding:0 2px;
+          color:#5b6a82;font-size:9px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+          font-weight:700;letter-spacing:.04em;
         }
-        .faderMarks span{ opacity:.92; }
+        .faderMarks span{ opacity:.85; }
         .eqKnobCol{
           display:flex;flex-direction:column;flex-wrap:nowrap;gap:5px;align-items:stretch;
         }
@@ -857,16 +893,19 @@ export function AdminApp() {
           box-sizing:border-box;
           overflow-x:auto;
           overflow-y:hidden;
-          border:1px solid #3a516d;
-          border-radius:18px;
+          border:1px solid #1e2a3c;
+          border-radius:10px;
           background:
-            radial-gradient(circle at top, rgba(88,166,255,.08), transparent 24%),
-            linear-gradient(180deg,#131a24 0%,#0f141c 100%);
-          padding:10px 8px 14px;
-          box-shadow:inset 0 1px 0 rgba(255,255,255,.04), 0 12px 28px rgba(0,0,0,.2);
+            repeating-linear-gradient(0deg, transparent 0, transparent 14px, rgba(255,255,255,.012) 14px, rgba(255,255,255,.012) 15px),
+            linear-gradient(180deg,#070b13 0%, #05080d 100%);
+          padding:14px 10px 16px;
+          box-shadow:
+            inset 0 0 0 1px rgba(255,255,255,.02),
+            inset 0 0 30px rgba(0,0,0,.55),
+            0 12px 28px rgba(0,0,0,.45);
         }
         .chBoard{
-          display:flex;gap:10px;align-items:stretch;
+          display:flex;gap:14px;align-items:stretch;
           width:max-content;
           max-width:none;
           padding:2px 2px 10px;
@@ -939,77 +978,136 @@ export function AdminApp() {
           display:flex;flex-wrap:wrap;gap:10px;align-items:flex-start;
         }
         .eqKnob{
-          width:42px;display:flex;flex-direction:column;align-items:center;gap:2px;
-          padding:4px 2px;border:1px solid color-mix(in srgb, var(--ch-accent, #58a6ff) 35%, #324a64);
-          border-radius:7px;background:#101822;
-          box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
+          width:42px;display:flex;flex-direction:column;align-items:center;gap:3px;
+          padding:5px 2px;border:1px solid #1e2a3c;
+          border-radius:5px;
+          background:linear-gradient(180deg,#0c1320 0%,#070b13 100%);
+          box-shadow:
+            inset 0 1px 0 rgba(255,255,255,.03),
+            inset 0 -1px 0 rgba(0,0,0,.6);
         }
         .eqKnob__label{
-          font-size:9px;font-weight:800;letter-spacing:.03em;color:color-mix(in srgb, var(--ch-accent, #dbe6f3) 70%, #dbe6f3);text-transform:uppercase;
+          font-size:8px;font-weight:900;letter-spacing:.16em;
+          color:#5b6a82;text-transform:uppercase;
+          font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
         }
+        /* Knob com anel ativo (conic) ao redor de bezel metalizado + indicador. */
         .eqKnob__dial{
           position:relative;width:34px;height:34px;border-radius:999px;
           background:
-            conic-gradient(from -130deg,#2ea043 0 var(--knob-fill,50%), #243347 var(--knob-fill,50%) 100%);
-          box-shadow:
-            inset 0 0 0 2px #0d141d,
-            0 5px 10px rgba(0,0,0,.32),
-            0 0 0 1px color-mix(in srgb, var(--ch-accent, #58a6ff) 55%, transparent),
-            0 0 14px color-mix(in srgb, var(--ch-accent, #58a6ff) 22%, transparent);
-          border:1px solid color-mix(in srgb, var(--ch-accent, #58a6ff) 40%, #445b75);
+            conic-gradient(from -130deg,
+              color-mix(in srgb, var(--ch-accent,#39ff14) 88%, #fff) 0 var(--knob-fill,50%),
+              #0a131e var(--knob-fill,50%) 260deg,
+              transparent 260deg 360deg);
+          box-shadow:0 0 8px color-mix(in srgb, var(--ch-accent,#39ff14) 28%, transparent);
         }
+        /* Bezel/escudo central do knob (camada interna). */
+        .eqKnob__dial::before{
+          content:"";position:absolute;left:50%;top:50%;width:24px;height:24px;border-radius:999px;
+          transform:translate(-50%,-50%);
+          background:
+            radial-gradient(circle at 30% 25%, rgba(255,255,255,.18), transparent 38%),
+            linear-gradient(180deg,#1f2a3a 0%, #0c121b 100%);
+          border:1px solid #2a394f;
+          box-shadow:
+            inset 0 1px 0 rgba(255,255,255,.18),
+            inset 0 -2px 4px rgba(0,0,0,.6),
+            0 3px 6px rgba(0,0,0,.45);
+        }
+        /* Indicador (linha branca radial) — gira com --knob-angle. */
         .eqKnob__dial::after{
-          content:"";position:absolute;left:50%;top:50%;width:2px;height:11px;border-radius:99px;
-          background:#f6fbff;transform-origin:50% calc(100% - 2px);
-          transform:translate(-50%,-90%) rotate(var(--knob-angle,-130deg));
-          box-shadow:0 0 0 1px rgba(0,0,0,.35);
+          content:"";position:absolute;left:50%;top:50%;width:2px;height:9px;border-radius:99px;
+          background:#f6fbff;transform-origin:50% 14px;
+          transform:translate(-50%,-15px) rotate(var(--knob-angle,-130deg));
+          box-shadow:0 0 4px rgba(255,255,255,.6);
+          z-index:2;
         }
         .eqKnob__input{
           position:absolute;inset:0;opacity:0;cursor:pointer;
         }
         .eqKnob__value{
-          width:100%;max-width:100%;text-align:center;padding:1px 3px;border-radius:3px;
-          border:1px solid color-mix(in srgb, var(--ch-accent, #58a6ff) 25%, #3c5068);
-          background:#222b36;color:#9ab8d8;font-size:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+          width:100%;max-width:100%;text-align:center;padding:1px 3px;border-radius:2px;
+          border:1px solid #11202d;
+          background:#040608;
+          color:var(--ch-accent,#39ff14);
+          font-size:8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+          font-weight:800;letter-spacing:.04em;
           box-sizing:border-box;
+          box-shadow:inset 0 0 4px rgba(0,0,0,.85);
+          text-shadow:0 0 3px color-mix(in srgb, var(--ch-accent,#39ff14) 50%, transparent);
         }
         .chCard{
           --ch-accent:#58a6ff;
+          position:relative;
           flex:0 0 auto;width:min(218px, 88vw);scroll-snap-align:start;box-sizing:border-box;
-          border-radius:16px;padding:10px 10px 9px;
-          background:
-            radial-gradient(circle at top right, color-mix(in srgb, var(--ch-accent, #58a6ff) 12%, transparent), transparent 28%),
-            linear-gradient(180deg,#19212d 0%,#101722 100%);
-          box-shadow:0 14px 28px rgba(0,0,0,.26), inset 0 1px 0 rgba(255,255,255,.03);
-          display:flex;flex-direction:column;gap:8px;
+          border-radius:8px;padding:18px 8px 9px;
+          background:linear-gradient(180deg,#0e151f 0%,#070b13 100%);
+          border:1px solid #1e2a3c;
+          box-shadow:
+            0 14px 28px rgba(0,0,0,.45),
+            inset 0 1px 0 rgba(255,255,255,.04),
+            inset 0 -1px 0 rgba(0,0,0,.5);
+          display:flex;flex-direction:column;gap:7px;
+        }
+        /* Scribble strip — faixa colorida no topo do channel strip. */
+        .chCard:before{
+          content:"";position:absolute;left:0;right:0;top:0;height:10px;
+          background:var(--ch-accent,#58a6ff);
+          border-top-left-radius:8px;border-top-right-radius:8px;
+          box-shadow:0 1px 0 rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.18);
+          pointer-events:none;
+        }
+        /* Linha vertical metalizada entre strips (visual de painel). */
+        .chCard:after{
+          content:"";position:absolute;right:-6px;top:14px;bottom:8px;width:1px;
+          background:linear-gradient(180deg, transparent 0%, rgba(255,255,255,.04) 30%, rgba(255,255,255,.04) 70%, transparent 100%);
+          pointer-events:none;
         }
         .chCard__sourcePill{
           align-self:flex-start;
-          padding:4px 10px;border-radius:999px;
-          border:1px solid color-mix(in srgb, var(--ch-accent, #58a6ff) 35%, #3c5068);
-          background:rgba(8,13,20,.68);
-          color:color-mix(in srgb, var(--ch-accent, #dbe6f3) 72%, #dbe6f3);
-          font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
+          padding:3px 8px;border-radius:3px;
+          border:1px solid color-mix(in srgb, var(--ch-accent, #58a6ff) 30%, #1e2a3c);
+          background:#040608;
+          color:color-mix(in srgb, var(--ch-accent, #9caec6) 65%, #9caec6);
+          font-size:9px;font-weight:900;letter-spacing:.14em;text-transform:uppercase;
+          font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
         }
         .chCard__hdr{
-          display:flex;align-items:flex-start;gap:6px;
+          display:flex;align-items:center;gap:6px;
+          padding:4px 6px;border-radius:4px;
+          background:#0e1825;
+          border:1px solid #1e2a3c;
+          box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
         }
         .chCard__badge{
           position:relative;
-          width:27px;height:27px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:900;
-          color:#07111a;box-shadow:0 6px 14px rgba(0,0,0,.25);flex:0 0 auto;
-          font-size:14px;
+          width:24px;height:24px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-weight:900;
+          color:#06090f;
+          box-shadow:
+            0 0 0 1px rgba(0,0,0,.5),
+            inset 0 1px 0 rgba(255,255,255,.4),
+            0 4px 10px rgba(0,0,0,.4);
+          flex:0 0 auto;
+          font-size:11px;letter-spacing:.04em;
         }
         .chCard__badge--muted::after{
           content:"";
           position:absolute;left:50%;top:50%;
-          width:2px;height:22px;border-radius:99px;background:#f85149;
+          width:2px;height:22px;border-radius:99px;background:#ff3b3b;
           transform:translate(-50%,-50%) rotate(-35deg);
-          box-shadow:0 0 8px rgba(248,81,73,.6);
+          box-shadow:0 0 8px rgba(255,59,59,.7);
         }
         .chCard__titles{min-width:0;flex:1 1 auto;}
-        .chCard__titles strong{display:block;font-size:12px;line-height:1.15;color:#e8eaed;}
-        .chCard__titles small{display:block;margin-top:2px;color:#9aa0a6;font-size:10px;line-height:1.25;}
+        .chCard__titles strong{
+          display:block;font-size:11px;line-height:1.18;color:#e8eef7;
+          font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+          font-weight:700;letter-spacing:.02em;
+          overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+        }
+        .chCard__titles small{
+          display:block;margin-top:1px;color:#5b6a82;font-size:9px;line-height:1.2;
+          font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.04em;
+        }
         .deskFieldLabel{
           color:#8ea8c2;font-size:10px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;
         }
@@ -3673,6 +3771,7 @@ function MusicianControls({
   )
   const groupIds = musician.scope.groupIds
   const levelsByIndex = audioInputLevels?.levelsByIndex ?? {}
+  const masterComp = (musician as MusicianStrip).masterComp as any
 
   return (
     <div style={{ minWidth: 0, maxWidth: '100%' }}>
@@ -3683,6 +3782,71 @@ function MusicianControls({
           recarrega esta página.
         </p>
       )}
+      <div style={{ marginTop: 12, padding: 12, borderRadius: 10, border: '1px solid #2d3748', background: '#0d1117' }}>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
+          <strong style={{ color: '#c9d1d9' }}>Compressor master (por músico)</strong>
+          <label style={{ color: '#c9d1d9', display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              checked={Boolean(masterComp?.enabled)}
+              onChange={async (e) => {
+                const next = await api<MusicianStrip>(
+                  `/api/showfile/musician/${musician.id}`,
+                  {
+                    method: 'PATCH',
+                    token,
+                    body: JSON.stringify({
+                      masterComp: { ...(masterComp || {}), enabled: e.target.checked },
+                    }),
+                  },
+                )
+                onMusicianStripPatched?.(next)
+              }}
+            />
+            ativo
+          </label>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginTop: 10 }}>
+          {[
+            { k: 'thresholdDb', label: 'Threshold', min: -60, max: 0, step: 1, unit: 'dB' },
+            { k: 'ratio', label: 'Ratio', min: 1, max: 20, step: 0.5, unit: ':1' },
+            { k: 'attackMs', label: 'Attack', min: 0.2, max: 100, step: 0.2, unit: 'ms' },
+            { k: 'releaseMs', label: 'Release', min: 5, max: 800, step: 1, unit: 'ms' },
+            { k: 'kneeDb', label: 'Knee', min: 0, max: 18, step: 0.5, unit: 'dB' },
+            { k: 'makeupDb', label: 'Makeup', min: -12, max: 18, step: 0.5, unit: 'dB' },
+          ].map((p) => (
+            <div key={p.k} style={{ border: '1px solid #223045', borderRadius: 10, padding: 10, background: '#0b1220' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+                <span style={{ color: '#8b949e', fontSize: 12 }}>{p.label}</span>
+                <span style={{ color: '#c9d1d9', fontSize: 12 }}>
+                  {Number(masterComp?.[p.k] ?? 0).toFixed(p.step < 1 ? 1 : 0)} {p.unit}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={p.min}
+                max={p.max}
+                step={p.step}
+                value={Number(masterComp?.[p.k] ?? 0)}
+                onChange={async (e) => {
+                  const next = await api<MusicianStrip>(
+                    `/api/showfile/musician/${musician.id}`,
+                    {
+                      method: 'PATCH',
+                      token,
+                      body: JSON.stringify({
+                        masterComp: { ...(masterComp || {}), [p.k]: Number(e.target.value) },
+                      }),
+                    },
+                  )
+                  onMusicianStripPatched?.(next)
+                }}
+                style={{ width: '100%', marginTop: 6 }}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
       <div className="chBoardShell" style={{ marginTop: 12 }}>
       <div className="chBoard musicianDeskBoard">
         {groupIds.map((gid) => {
@@ -3749,6 +3913,7 @@ function MusicianControls({
             midDb: earEq?.midDb ?? ch.eq.midDb,
             highDb: earEq?.highDb ?? ch.eq.highDb,
           }
+          const peq = (musician as MusicianStrip).peqByChannel?.[cid] as any
           return (
             <div
               key={cid}
@@ -3854,6 +4019,156 @@ function MusicianControls({
                         <div className="eqKnob__value">{eqBase[k].toFixed(1)} dB</div>
                       </div>
                     ))}
+                    <details style={{ marginTop: 10, width: '100%' }}>
+                      <summary style={{ cursor: 'pointer', color: '#79c0ff', fontSize: 12 }}>
+                        PEQ (6 bandas) · por músico
+                      </summary>
+                      <div style={{ marginTop: 10 }}>
+                        <label style={{ color: '#c9d1d9', display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <input
+                            type="checkbox"
+                            checked={Boolean(peq?.enabled)}
+                            onChange={async (e) => {
+                              const nextPeq = { ...(peq || { bands: [] }), enabled: e.target.checked }
+                              const next = await api<MusicianStrip>(
+                                `/api/showfile/musician/${musician.id}`,
+                                {
+                                  method: 'PATCH',
+                                  token,
+                                  body: JSON.stringify({ peqByChannel: { [cid]: nextPeq } }),
+                                },
+                              )
+                              onMusicianStripPatched?.(next)
+                            }}
+                          />
+                          PEQ ativo
+                        </label>
+                        {(Array.isArray(peq?.bands) ? peq.bands : []).length === 0 ? (
+                          <button
+                            type="button"
+                            style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, border: '1px solid #2d3748', background: '#102a4a', color: '#c9d1d9', cursor: 'pointer' }}
+                            onClick={async () => {
+                              const nextPeq = {
+                                enabled: true,
+                                bands: [
+                                  { type: 'hpf', enabled: true, freqHz: 80, q: 0.707, gainDb: 0 },
+                                  { type: 'bell', enabled: true, freqHz: 250, q: 1.0, gainDb: 0 },
+                                  { type: 'bell', enabled: true, freqHz: 800, q: 1.0, gainDb: 0 },
+                                  { type: 'bell', enabled: true, freqHz: 2500, q: 1.0, gainDb: 0 },
+                                  { type: 'highshelf', enabled: true, freqHz: 9000, q: 0.707, gainDb: 0 },
+                                  { type: 'lpf', enabled: false, freqHz: 18000, q: 0.707, gainDb: 0 },
+                                ],
+                              }
+                              const next = await api<MusicianStrip>(
+                                `/api/showfile/musician/${musician.id}`,
+                                { method: 'PATCH', token, body: JSON.stringify({ peqByChannel: { [cid]: nextPeq } }) },
+                              )
+                              onMusicianStripPatched?.(next)
+                            }}
+                          >
+                            Criar PEQ padrão
+                          </button>
+                        ) : null}
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10, marginTop: 10 }}>
+                          {(Array.isArray(peq?.bands) ? peq.bands : []).slice(0, 6).map((b: any, bi: number) => (
+                            <div key={`${cid}-b-${bi}`} style={{ border: '1px solid #223045', borderRadius: 10, padding: 10, background: '#0b1220' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center' }}>
+                                <strong style={{ color: '#c9d1d9', fontSize: 12 }}>{String(b?.type || `b${bi + 1}`)}</strong>
+                                <label style={{ color: '#c9d1d9', display: 'flex', gap: 8, alignItems: 'center', fontSize: 12 }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(b?.enabled !== false)}
+                                    onChange={async (e) => {
+                                      const bands = (Array.isArray(peq?.bands) ? peq.bands : []).slice(0, 6)
+                                      const nextBands = bands.map((x: any, j: number) => (j === bi ? { ...x, enabled: e.target.checked } : x))
+                                      const nextPeq = { ...(peq || {}), enabled: Boolean(peq?.enabled), bands: nextBands }
+                                      const next = await api<MusicianStrip>(
+                                        `/api/showfile/musician/${musician.id}`,
+                                        { method: 'PATCH', token, body: JSON.stringify({ peqByChannel: { [cid]: nextPeq } }) },
+                                      )
+                                      onMusicianStripPatched?.(next)
+                                    }}
+                                  />
+                                  on
+                                </label>
+                              </div>
+                              <div style={{ marginTop: 8 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#8b949e', fontSize: 11 }}>
+                                  <span>Freq</span>
+                                  <span>{Math.round(Number(b?.freqHz ?? 1000))} Hz</span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min={20}
+                                  max={20000}
+                                  step={10}
+                                  value={Number(b?.freqHz ?? 1000)}
+                                  onChange={async (e) => {
+                                    const bands = (Array.isArray(peq?.bands) ? peq.bands : []).slice(0, 6)
+                                    const nextBands = bands.map((x: any, j: number) => (j === bi ? { ...x, freqHz: Number(e.target.value) } : x))
+                                    const nextPeq = { ...(peq || {}), enabled: Boolean(peq?.enabled), bands: nextBands }
+                                    const next = await api<MusicianStrip>(
+                                      `/api/showfile/musician/${musician.id}`,
+                                      { method: 'PATCH', token, body: JSON.stringify({ peqByChannel: { [cid]: nextPeq } }) },
+                                    )
+                                    onMusicianStripPatched?.(next)
+                                  }}
+                                  style={{ width: '100%', marginTop: 6 }}
+                                />
+                              </div>
+                              <div style={{ marginTop: 8 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#8b949e', fontSize: 11 }}>
+                                  <span>Q</span>
+                                  <span>{Number(b?.q ?? 1).toFixed(2)}</span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min={0.1}
+                                  max={12}
+                                  step={0.05}
+                                  value={Number(b?.q ?? 1)}
+                                  onChange={async (e) => {
+                                    const bands = (Array.isArray(peq?.bands) ? peq.bands : []).slice(0, 6)
+                                    const nextBands = bands.map((x: any, j: number) => (j === bi ? { ...x, q: Number(e.target.value) } : x))
+                                    const nextPeq = { ...(peq || {}), enabled: Boolean(peq?.enabled), bands: nextBands }
+                                    const next = await api<MusicianStrip>(
+                                      `/api/showfile/musician/${musician.id}`,
+                                      { method: 'PATCH', token, body: JSON.stringify({ peqByChannel: { [cid]: nextPeq } }) },
+                                    )
+                                    onMusicianStripPatched?.(next)
+                                  }}
+                                  style={{ width: '100%', marginTop: 6 }}
+                                />
+                              </div>
+                              <div style={{ marginTop: 8 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#8b949e', fontSize: 11 }}>
+                                  <span>Gain</span>
+                                  <span>{Number(b?.gainDb ?? 0).toFixed(1)} dB</span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min={-24}
+                                  max={24}
+                                  step={0.5}
+                                  value={Number(b?.gainDb ?? 0)}
+                                  onChange={async (e) => {
+                                    const bands = (Array.isArray(peq?.bands) ? peq.bands : []).slice(0, 6)
+                                    const nextBands = bands.map((x: any, j: number) => (j === bi ? { ...x, gainDb: Number(e.target.value) } : x))
+                                    const nextPeq = { ...(peq || {}), enabled: Boolean(peq?.enabled), bands: nextBands }
+                                    const next = await api<MusicianStrip>(
+                                      `/api/showfile/musician/${musician.id}`,
+                                      { method: 'PATCH', token, body: JSON.stringify({ peqByChannel: { [cid]: nextPeq } }) },
+                                    )
+                                    onMusicianStripPatched?.(next)
+                                  }}
+                                  style={{ width: '100%', marginTop: 6 }}
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </details>
                   </div>
                 )}
               </div>
