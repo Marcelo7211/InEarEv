@@ -1452,8 +1452,11 @@ export function AdminApp() {
           showfile={showfile}
           token={token}
           audioInputLevels={audioInputLevels}
+          spectrumData={spectrumData}
+          showRta={showRta}
           onSaved={refreshShowfile}
           onMusicianStripPatched={mergeMusicianStripIntoShowfile}
+          onToggleRta={setShowRta}
         />
       )}
 
@@ -3638,14 +3641,20 @@ function MusicianTable({
   showfile,
   token,
   audioInputLevels,
+  spectrumData,
+  showRta,
   onSaved,
   onMusicianStripPatched,
+  onToggleRta,
 }: {
   showfile: Showfile
   token: string
   audioInputLevels: AudioInputLevelsResponse | null
+  spectrumData: any
+  showRta: boolean
   onSaved: () => void
   onMusicianStripPatched?: (m: MusicianStrip) => void
+  onToggleRta?: (next: boolean) => void
 }) {
   const ui = {
     card: {
@@ -3839,7 +3848,7 @@ function MusicianTable({
               spectrumData={spectrumData}
               showRta={showRta}
               onMusicianStripPatched={onMusicianStripPatched}
-              onToggleRta={setShowRta}
+              onToggleRta={onToggleRta}
             />
           ) : (
             <p style={{ color: '#9aa0a6' }}>Nenhum músico cadastrado.</p>
