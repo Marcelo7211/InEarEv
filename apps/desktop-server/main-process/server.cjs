@@ -737,6 +737,12 @@ function buildWin32DshowAggregateFfmpegArgs(p) {
       String(MVP_SAMPLE_RATE_HZ),
       '-audio_buffer_size',
       String(dshowAudioBufferMs),
+      // Replace device timestamps with wall-clock timestamps so that the amerge
+      // filter sees a common timeline across all DirectShow devices. Without this,
+      // clock drift between interfaces accumulates and starves one input, causing
+      // the robotic/dropout artefacts reported in aggregate mode.
+      '-use_wallclock_as_timestamps',
+      '1',
       ...(audioPinName ? ['-audio_pin_name', audioPinName] : []),
       ...(audioDeviceNumber !== null ? ['-audio_device_number', String(audioDeviceNumber)] : []),
       '-i',
@@ -745,7 +751,9 @@ function buildWin32DshowAggregateFfmpegArgs(p) {
   }
   const nIn = deviceNames.length
   const mergeIn = Array.from({ length: nIn }, (_, i) => `[${i}:a]`).join('')
-  const fc = `${mergeIn}amerge=inputs=${nIn}[mrg];[mrg]aformat=sample_fmts=s16:sample_rates=${MVP_SAMPLE_RATE_HZ}[out]`
+  // aresample=async=1 absorbs residual clock drift between the re-timestamped
+  // streams, preventing dropouts without adding audible pitch artefacts.
+  const fc = `${mergeIn}amerge=inputs=${nIn}[mrg];[mrg]aresample=async=1:min_hard_comp=0.100000:first_pts=0,aformat=sample_fmts=s16:sample_rates=${MVP_SAMPLE_RATE_HZ}[out]`
   const tail = ['-filter_complex', fc, '-map', '[out]', '-f', 's16le', '-']
   return [...head, ...inputs, ...tail]
 }
@@ -1820,7 +1828,32 @@ function createServices(app) {
   let audioSeq = 0
   let sampleClock = 0
   let audioTimeout = null
+  let audioTimeoutIsImmediate = false
   let nextAudioTickAt = Date.now()
+
+  function scheduleNextAudioTick(delayMs) {
+    // On Windows, setTimeout has ~15 ms resolution (system timer default).
+    // When the tick is behind schedule (delay ≤ 0) or the delay is below the
+    // OS timer granularity (~1 ms), use setImmediate instead so catch-up ticks
+    // run on the very next event-loop iteration — cutting effective ring-buffer
+    // latency from ~15 ms to < 1 ms on Windows.
+    if (delayMs <= 1) {
+      audioTimeout = setImmediate(audioTick)
+      audioTimeoutIsImmediate = true
+    } else {
+      audioTimeout = setTimeout(audioTick, delayMs)
+      audioTimeoutIsImmediate = false
+    }
+  }
+
+  function cancelAudioTimeout() {
+    if (audioTimeout) {
+      if (audioTimeoutIsImmediate) clearImmediate(audioTimeout)
+      else clearTimeout(audioTimeout)
+      audioTimeout = null
+      audioTimeoutIsImmediate = false
+    }
+  }
 
   function audioBlockSamples() {
     const configured = clampAudioBlockSamples(state.audioBlockSamples)
@@ -2112,6 +2145,7 @@ function createServices(app) {
   let captureRingW = 0
   let captureRingR = 0
   let captureRingFill = 0
+  let captureBlockBuf = null // pre-allocated output buffer for takePcmBlock (avoids per-tick GC)
   let captureChild = null
   let captureUnderruns = 0
   /** Última vez em que havia PCM suficiente do ffmpeg (para /api/session). */
@@ -2126,10 +2160,30 @@ function createServices(app) {
           ? 10
           : hasActiveWebRtcLatencyProfile('pro')
             ? 14
-            : 40
+            // Reduced from 40 ms → 20 ms: safe for USB multi-channel interfaces
+            // (UI24R 32ch) even without an active WebRTC session, while still
+            // giving ~7 block-widths of OS-scheduling headroom at 128 frames/48 kHz.
+            : 20
         : 80
     const targetBytes = Math.round((MVP_SAMPLE_RATE_HZ * bytesPerFrame * targetMs) / 1000)
     return Math.max(minBlockBytes * 2, targetBytes)
+  }
+
+  /**
+   * Resize (or initialise) the capture ring buffer. Must be called explicitly
+   * when capture starts or when blockSamples/nCh changes — NOT from the hot
+   * paths (pushCaptureChunk / takePcmBlock) to prevent the reset-on-every-chunk
+   * bug that causes the >10 s delay in aggregate mode.
+   */
+  function syncCaptureRingSize(blockSamples, nCh) {
+    const capBytes = captureBufferSoftCapBytes(blockSamples, nCh)
+    if (capBytes === captureRingCap && captureBlockBuf && captureBlockBuf.length === blockSamples * nCh) return
+    captureRing = Buffer.allocUnsafe(capBytes)
+    captureRingCap = capBytes
+    captureRingW = 0
+    captureRingR = 0
+    captureRingFill = 0
+    captureBlockBuf = new Int16Array(blockSamples * nCh)
   }
 
   function normalizeCaptureChannelCount() {
@@ -2350,16 +2404,11 @@ function createServices(app) {
   }
 
   function pushCaptureChunk(chunk) {
-    const nCh = normalizeCaptureChannelCount()
-    const capBytes = captureBufferSoftCapBytes(audioBlockSamples(), nCh)
-    if (!Number.isFinite(capBytes) || capBytes < 1) return
-    if (capBytes !== captureRingCap) {
-      captureRing = Buffer.allocUnsafe(capBytes)
-      captureRingCap = capBytes
-      captureRingW = 0
-      captureRingR = 0
-      captureRingFill = 0
-    }
+    // Do NOT recalculate captureRingCap here — that caused the ring buffer to
+    // reset on every chunk whenever the WebRTC latency profile changed, which
+    // produced the >10 s delay and robotic artifacts in aggregate mode.
+    // Ring size is managed exclusively via syncCaptureRingSize().
+    if (captureRingCap < 1) return
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     if (buf.length <= 0) return
     if (buf.length >= captureRingCap) {
@@ -2557,6 +2606,10 @@ function createServices(app) {
   function startCaptureIfConfigured() {
     stopCaptureChild()
     captureUnderruns = 0
+    // syncCaptureRingSize() is called right before each captureChild spawn below,
+    // AFTER the channel-count probing has updated state.captureChannelCount.
+    // Calling it here (before probing) would size the ring with the wrong nCh
+    // and cause constant underruns when ffmpeg delivers multi-channel data.
 
     const cmd = process.env.INEAR_CAPTURE_CMD
     if (cmd && String(cmd).trim()) {
@@ -2576,6 +2629,7 @@ function createServices(app) {
         captureDeviceIndex: null,
         ffmpegPath: String(cmd),
       })
+      syncCaptureRingSize(audioBlockSamples(), normalizeCaptureChannelCount())
       captureChild.stdout.on('data', pushCaptureChunk)
       return
     }
@@ -2643,6 +2697,7 @@ function createServices(app) {
             captureDeviceIndex: n,
             ffmpegPath: ffmpeg,
           })
+          syncCaptureRingSize(audioBlockSamples(), normalizeCaptureChannelCount())
           captureChild.stdout.on('data', pushCaptureChunk)
           return
         }
@@ -2687,14 +2742,17 @@ function createServices(app) {
           const audioDeviceNumber = Number.isFinite(Number(audioDeviceNumberRaw))
             ? Math.max(0, Math.floor(Number(audioDeviceNumberRaw)))
             : null
-          const defaultDshowAudioBufferMs = 20
+          // Reduced from 20 ms → 10 ms to match single-device mode.
+          // USB multi-channel interfaces (e.g. UI24R 32ch) handle 10 ms reliably;
+          // override with INEAR_DSHOW_AUDIO_BUFFER_MS if a specific device needs more.
+          const defaultDshowAudioBufferMs = 10
           const dshowAudioBufferMsRaw = Number(
             String(process.env.INEAR_DSHOW_AUDIO_BUFFER_MS || '').trim() || String(defaultDshowAudioBufferMs),
           )
           const dshowAudioBufferMs =
             Number.isFinite(dshowAudioBufferMsRaw) && dshowAudioBufferMsRaw >= 0
               ? Math.max(0, Math.min(500, Math.floor(dshowAudioBufferMsRaw)))
-              : 20
+              : 10
           const aggArgs = buildWin32DshowAggregateFfmpegArgs({
             deviceNames: aggVal.names,
             dshowAudioBufferMs,
@@ -2719,6 +2777,7 @@ function createServices(app) {
             captureDeviceIndex: null,
             ffmpegPath: ffmpeg,
           })
+          syncCaptureRingSize(audioBlockSamples(), normalizeCaptureChannelCount())
           captureChild.stdout.on('data', pushCaptureChunk)
           return
         }
@@ -2814,6 +2873,7 @@ function createServices(app) {
               captureDeviceIndex: n,
               ffmpegPath: ffmpeg,
             })
+            syncCaptureRingSize(audioBlockSamples(), normalizeCaptureChannelCount())
             captureChild.stdout.on('data', pushCaptureChunk)
             return
           }
@@ -2837,25 +2897,23 @@ function createServices(app) {
    */
   function takePcmBlock(blockSamples, nCh) {
     const need = blockSamples * nCh * 2
-    const capBytes = captureBufferSoftCapBytes(blockSamples, nCh)
-    if (capBytes !== captureRingCap) {
-      captureRing = Buffer.allocUnsafe(capBytes)
-      captureRingCap = capBytes
-      captureRingW = 0
-      captureRingR = 0
-      captureRingFill = 0
-      return null
-    }
+    // Never resize the ring here — resizing resets the buffer and causes underruns.
+    // The ring is sized once in syncCaptureRingSize() called from startCaptureIfConfigured().
+    if (captureRingCap < need) return null
     if (captureRingFill < need) return null
-    const out = Buffer.allocUnsafe(need)
+    // Write directly into the pre-allocated buffer to avoid per-tick GC pressure.
+    const out = (captureBlockBuf && captureBlockBuf.length === blockSamples * nCh)
+      ? captureBlockBuf
+      : new Int16Array(blockSamples * nCh)
+    const outBuf = Buffer.from(out.buffer, out.byteOffset, need)
     const first = Math.min(need, captureRingCap - captureRingR)
-    captureRing.copy(out, 0, captureRingR, captureRingR + first)
+    captureRing.copy(outBuf, 0, captureRingR, captureRingR + first)
     if (first < need) {
-      captureRing.copy(out, first, 0, need - first)
+      captureRing.copy(outBuf, first, 0, need - first)
     }
     captureRingR = (captureRingR + need) % captureRingCap
     captureRingFill = Math.max(0, captureRingFill - need)
-    return new Int16Array(out.buffer, out.byteOffset, blockSamples * nCh)
+    return out
   }
 
   function gainForPhysicalInput(mx, idx, nCh) {
@@ -4505,12 +4563,15 @@ function createServices(app) {
   let audioTickCache = {
     showfile: null,
     chIds: [],
+    groupIds: [],
     monoById: null,
     chCaptureIdx: null,
     chMode: null,
     musiciansLen: 0,
     musicianById: new Map(),
   }
+  // Pre-allocated gain buffer — avoids new Float32Array(nCh) on every audio tick.
+  let audioTickInputGainBuf = new Float32Array(32)
 
   const fxRuntimeByMusician = new Map()
   const fxLevelsByMusician = new Map()
@@ -4864,10 +4925,14 @@ function createServices(app) {
     const base = sampleClock
     const sf = state.showfile
     const activeMusicianIds = activeMusicianIdsForAudio()
-    const cacheInvalid = audioTickCache.showfile !== sf || audioTickCache.chIds.length !== sf.channels.length
+    const cacheInvalid =
+      audioTickCache.showfile !== sf ||
+      audioTickCache.chIds.length !== sf.channels.length ||
+      audioTickCache.groupIds.length !== sf.groups.length
     if (cacheInvalid) {
       audioTickCache.showfile = sf
       audioTickCache.chIds = sf.channels.map((c) => c.id)
+      audioTickCache.groupIds = sf.groups.map((g) => g.id)
       audioTickCache.monoById = Object.fromEntries(audioTickCache.chIds.map((id) => [id, 0]))
       audioTickCache.chCaptureIdx = new Int16Array(audioTickCache.chIds.length)
       audioTickCache.chMode = new Uint8Array(audioTickCache.chIds.length)
@@ -4927,7 +4992,7 @@ function createServices(app) {
 
     if (targets.length > 0) {
       const allChIds = audioTickCache.chIds
-      const allGroupIds = sf.groups.map((g) => g.id)
+      const allGroupIds = audioTickCache.groupIds
       const step = Math.min(1, Math.max(0.02, fadeStep * block))
       for (const t of targets) {
         const mult = {}
@@ -4981,8 +5046,9 @@ function createServices(app) {
         gainByIndex: {},
       }
       const gi = mx.gainByIndex && typeof mx.gainByIndex === 'object' ? mx.gainByIndex : {}
-      const inputGain = new Float32Array(Math.max(1, nCh))
-      for (let idx = 0; idx < inputGain.length; idx++) {
+      if (audioTickInputGainBuf.length < nCh) audioTickInputGainBuf = new Float32Array(nCh)
+      const inputGain = audioTickInputGainBuf
+      for (let idx = 0; idx < nCh; idx++) {
         let g = 1
         const k = String(idx)
         if (typeof gi[k] === 'number') g = Math.max(0, Math.min(4, gi[k]))
@@ -5144,13 +5210,13 @@ function createServices(app) {
     if (nextAudioTickAt < now - delay * 3) {
       nextAudioTickAt = now + delay
     }
-    audioTimeout = setTimeout(audioTick, Math.max(0, nextAudioTickAt - now))
+    scheduleNextAudioTick(Math.max(0, nextAudioTickAt - now))
   }
   nextAudioTickAt = Date.now() + (1000 * audioBlockSamples()) / MVP_SAMPLE_RATE_HZ
   audioTick()
 
   function shutdown() {
-    if (audioTimeout) clearTimeout(audioTimeout)
+    cancelAudioTimeout()
     stopCaptureChild()
     try {
       wss.clients.forEach((c) => c.close())
