@@ -2404,6 +2404,9 @@ function createServices(app) {
     captureRingR = 0
     captureRingFill = 0
     captureMeterState = { levelsByIndex: {}, updatedAt: Date.now() }
+    rtaAccumBuffer = new Float32Array(0)
+    rtaAccumPos = 0
+    rtaAccumTotal = 0
     resetCaptureDebugState()
   }
 
@@ -2495,32 +2498,54 @@ function createServices(app) {
 
   const rtaFrequencies = generateRtaFrequencies()
 
-  function updateSpectrumAnalysis(capBlock, nCh) {
-    if (!capBlock || nCh < 1 || capBlock.length < 1024) return
-    const frames = Math.floor(capBlock.length / nCh)
-    const magnitudes = []
+  // Ring buffer accumulator for RTA — needs many more samples than one audio block.
+  const RTA_WINDOW_FRAMES = 4096
+  let rtaAccumBuffer = new Float32Array(0)
+  let rtaAccumPos = 0
+  let rtaAccumTotal = 0
+
+  function accumulateRtaSamples(capBlock, nCh) {
+    if (!capBlock || nCh < 1) return
+    const needed = RTA_WINDOW_FRAMES * nCh
+    if (rtaAccumBuffer.length !== needed) {
+      rtaAccumBuffer = new Float32Array(needed)
+      rtaAccumPos = 0
+      rtaAccumTotal = 0
+    }
+    const newFrames = Math.floor(capBlock.length / nCh)
+    for (let i = 0; i < newFrames; i++) {
+      const wf = rtaAccumPos
+      for (let c = 0; c < nCh; c++) {
+        rtaAccumBuffer[wf * nCh + c] = capBlock[i * nCh + c] / 32768
+      }
+      rtaAccumPos = (rtaAccumPos + 1) % RTA_WINDOW_FRAMES
+      rtaAccumTotal++
+    }
+  }
+
+  function updateSpectrumAnalysis(nCh) {
+    if (nCh < 1 || rtaAccumTotal < RTA_WINDOW_FRAMES) return
+    // rtaAccumPos points to the oldest frame after the last write.
+    const readStart = rtaAccumPos
+    const norm = RTA_WINDOW_FRAMES / 2
+    const magnitudesByChannel = []
     for (let c = 0; c < nCh; c++) {
-      const signal = []
-      for (let i = 0; i < frames; i++) {
-        signal.push(capBlock[i * nCh + c] / 32768)
+      const signal = new Float32Array(RTA_WINDOW_FRAMES)
+      for (let i = 0; i < RTA_WINDOW_FRAMES; i++) {
+        signal[i] = rtaAccumBuffer[((readStart + i) % RTA_WINDOW_FRAMES) * nCh + c]
       }
-      const channelMags = []
-      for (const freq of rtaFrequencies) {
-        const mag = computeGoertzel(signal, freq, MVP_SAMPLE_RATE_HZ)
-        channelMags.push(mag)
-      }
-      magnitudes.push(channelMags)
-    }
-    if (magnitudes.length > 0) {
-      const avg = rtaFrequencies.map((_, i) =>
-        magnitudes.reduce((sum, mags) => sum + (mags[i] ?? 0), 0) / magnitudes.length,
+      magnitudesByChannel.push(
+        rtaFrequencies.map((freq) => computeGoertzel(signal, freq, MVP_SAMPLE_RATE_HZ) / norm),
       )
-      spectrumState = {
-        frequencies: rtaFrequencies,
-        magnitudes: avg,
-        updatedAt: Date.now(),
-      }
     }
+    const avg = rtaFrequencies.map((_, i) =>
+      magnitudesByChannel.reduce((sum, mags) => sum + mags[i], 0) / magnitudesByChannel.length,
+    )
+    // Peak-normalize so the spectral shape always fills the visible EQ graph area.
+    let peakMag = 1e-10
+    for (const m of avg) if (m > peakMag) peakMag = m
+    const normalized = avg.map((m) => m / peakMag)
+    spectrumState = { frequencies: rtaFrequencies, magnitudes: normalized, updatedAt: Date.now() }
   }
 
   function silentMonoByChannel() {
@@ -4865,11 +4890,12 @@ function createServices(app) {
     if (useCapture && capBlock) {
       lastGoodCaptureMs = Date.now()
       captureMeterTick += 1
+      accumulateRtaSamples(capBlock, nCh)
       if (captureMeterTick % 3 === 0) {
         updateCaptureMeters(capBlock, nCh)
       }
       if (captureMeterTick % 6 === 0) {
-        updateSpectrumAnalysis(capBlock, nCh)
+        updateSpectrumAnalysis(nCh)
       }
     } else {
       decayCaptureMeters(nCh)
