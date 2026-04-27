@@ -8,6 +8,7 @@ import {
 } from 'react'
 
 import { PeqGraph, type PeqBandUi } from './PeqGraph'
+import { type SpectrumData } from './RtaOverlay'
 
 export type CompressorUi = {
   enabled: boolean
@@ -43,6 +44,12 @@ type FxModalProps = {
   onToggleBypass: (next: boolean) => void
   /** Cria PEQ default quando vazio. */
   onCreateDefaultPeq: () => void
+  /** Dados de espectro RTA em tempo real. */
+  spectrum?: SpectrumData | null
+  /** Habilita visualização do RTA. */
+  showRta?: boolean
+  /** Callback para alternar RTA. */
+  onToggleRta?: (next: boolean) => void
 }
 
 const DEFAULT_COMP: CompressorUi = {
@@ -69,6 +76,9 @@ export function FxModal({
   onCompCommit,
   onToggleBypass,
   onCreateDefaultPeq,
+  spectrum,
+  showRta,
+  onToggleRta,
 }: FxModalProps) {
   const [compOpen, setCompOpen] = useState(false)
 
@@ -200,6 +210,27 @@ export function FxModal({
           >
             {bypassed ? '⏸ BYPASS ON' : 'BYPASS'}
           </button>
+          {/* Toggle RTA */}
+          <button
+            type="button"
+            onClick={() => onToggleRta?.(!showRta)}
+            style={{
+              padding: '8px 14px',
+              borderRadius: 6,
+              border: `1px solid ${showRta ? accent : '#1e2a3c'}`,
+              background: showRta ? `${accent}18` : '#0a131e',
+              color: showRta ? accent : '#9caec6',
+              fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace',
+              fontSize: 11,
+              fontWeight: 900,
+              letterSpacing: '0.16em',
+              cursor: 'pointer',
+              touchAction: 'manipulation',
+            }}
+            title="RTA: exibe o analisador de espectro em tempo real"
+          >
+            {showRta ? '📊 RTA ON' : 'RTA'}
+          </button>
           <button
             type="button"
             onClick={onClose}
@@ -289,6 +320,8 @@ export function FxModal({
               accent={accent}
               height={260}
               width={760}
+              spectrum={spectrum}
+              showRta={showRta}
               onLiveBandsChange={(bands) =>
                 onPeqLive?.({ enabled: peqEnabled, bands })
               }

@@ -7,6 +7,7 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
+import { RtaOverlay, type SpectrumData } from './RtaOverlay'
 
 export type PeqBandUi = {
   type: 'hpf' | 'lpf' | 'bell' | 'lowshelf' | 'highshelf'
@@ -33,6 +34,10 @@ export type PeqGraphProps = {
   onBandsCommit: (bands: PeqBandUi[]) => void
   /** Toggle do enabled (LED de power). */
   onToggleEnabled?: (next: boolean) => void
+  /** Dados de espectro RTA em tempo real. */
+  spectrum: SpectrumData | null | undefined
+  /** Habilita visualização do RTA. */
+  showRta?: boolean
 }
 
 const FREQ_MIN = 20
@@ -161,6 +166,8 @@ export function PeqGraph({
   onLiveBandsChange,
   onBandsCommit,
   onToggleEnabled,
+  spectrum,
+  showRta = false,
 }: PeqGraphProps) {
   const svgRef = useRef<SVGSVGElement | null>(null)
   const [draftBands, setDraftBands] = useState<PeqBandUi[]>(bands)
@@ -501,6 +508,19 @@ export function PeqGraph({
             pointerEvents: 'none',
           }}
         />
+        {/* RTA overlay. */}
+        {spectrum && (
+          <g pointerEvents="none">
+            <RtaOverlay
+              spectrum={spectrum}
+              enabled={showRta && enabled}
+              accent={accent}
+              width={width}
+              height={height}
+              gainRangeDb={gainRangeDb}
+            />
+          </g>
+        )}
         {/* Pontos das bandas (numerados, arrastáveis) com badge de Hz. */}
         {draftBands.map((b, i) => {
           const off = b.enabled === false

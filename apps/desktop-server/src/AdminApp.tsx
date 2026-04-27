@@ -18,6 +18,7 @@ import {
   retornoMixerChannelOrder,
 } from '@inear/protocol'
 import { type PeqBandUi } from './components/PeqGraph'
+import { type SpectrumData } from './components/RtaOverlay'
 import { FxModal, type CompressorUi } from './components/FxModal'
 
 type Role = 'admin' | 'musician'
@@ -90,6 +91,8 @@ export function AdminApp() {
   >({})
   const [audioBlockSamples, setAudioBlockSamples] = useState<number | null>(null)
   const [audioInputLevels, setAudioInputLevels] = useState<AudioInputLevelsResponse | null>(null)
+  const [spectrumData, setSpectrumData] = useState<any>(null)
+  const [showRta, setShowRta] = useState<any>(false)
   const [setupRequired, setSetupRequired] = useState(false)
   const [setupChecked, setSetupChecked] = useState(false)
   const [loginUser, setLoginUser] = useState('')
@@ -224,6 +227,28 @@ export function AdminApp() {
       clearInterval(t)
     }
   }, [token, role, tab])
+
+  useEffect(() => {
+    if (!token || !showRta) {
+      setSpectrumData(null)
+      return
+    }
+    let cancelled = false
+    const load = async () => {
+      try {
+        const spectrum = await api<SpectrumData>('/api/audio-spectrum', { token })
+        if (!cancelled) setSpectrumData(spectrum)
+      } catch {
+        if (!cancelled) setSpectrumData(null)
+      }
+    }
+    void load()
+    const t = setInterval(load, 100)
+    return () => {
+      cancelled = true
+      clearInterval(t)
+    }
+  }, [token, showRta])
 
   useEffect(() => {
     let cancelled = false
@@ -4855,6 +4880,9 @@ function MusicianControls({
         peq={fxModalPeq as { enabled?: boolean; bands?: PeqBandUi[] } | null}
         comp={(masterComp as CompressorUi | undefined) ?? null}
         bypassed={fxModalBypassed}
+        spectrum={spectrumData as any}
+        showRta={showRta as any}
+        onToggleRta={setShowRta as any}
         onClose={() => setFxModalChannelId(null)}
         onPeqCommit={(next) => {
           if (!fxModalChannelId) return

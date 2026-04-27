@@ -2455,6 +2455,74 @@ function createServices(app) {
     captureMeterState = { levelsByIndex: next, updatedAt: Date.now() }
   }
 
+  let spectrumState = {
+    frequencies: [],
+    magnitudes: [],
+    updatedAt: 0,
+  }
+
+  function generateRtaFrequencies() {
+    const result = []
+    const startHz = 20
+    const endHz = 20000
+    const stepsPerOctave = 3
+    let f = startHz
+    while (f <= endHz) {
+      result.push(Math.round(f))
+      f *= Math.pow(2, 1 / stepsPerOctave)
+    }
+    return result
+  }
+
+  function computeGoertzel(signal, freq, sampleRate) {
+    const n = signal.length
+    if (n === 0) return 0
+    const k = (freq * n) / sampleRate
+    const w = (2 * Math.PI * k) / n
+    const coeff = 2 * Math.cos(w)
+    let s0 = 0,
+      s1 = 0,
+      s2 = 0
+    for (let i = 0; i < n; i++) {
+      const s = signal[i] + coeff * s1 - s2
+      s2 = s1
+      s1 = s
+    }
+    const real = s1 - s2 * Math.cos(w)
+    const imag = s2 * Math.sin(w)
+    return Math.sqrt(real * real + imag * imag)
+  }
+
+  const rtaFrequencies = generateRtaFrequencies()
+
+  function updateSpectrumAnalysis(capBlock, nCh) {
+    if (!capBlock || nCh < 1 || capBlock.length < 1024) return
+    const frames = Math.floor(capBlock.length / nCh)
+    const magnitudes = []
+    for (let c = 0; c < nCh; c++) {
+      const signal = []
+      for (let i = 0; i < frames; i++) {
+        signal.push(capBlock[i * nCh + c] / 32768)
+      }
+      const channelMags = []
+      for (const freq of rtaFrequencies) {
+        const mag = computeGoertzel(signal, freq, MVP_SAMPLE_RATE_HZ)
+        channelMags.push(mag)
+      }
+      magnitudes.push(channelMags)
+    }
+    if (magnitudes.length > 0) {
+      const avg = rtaFrequencies.map((_, i) =>
+        magnitudes.reduce((sum, mags) => sum + (mags[i] ?? 0), 0) / magnitudes.length,
+      )
+      spectrumState = {
+        frequencies: rtaFrequencies,
+        magnitudes: avg,
+        updatedAt: Date.now(),
+      }
+    }
+  }
+
   function silentMonoByChannel() {
     const out = {}
     for (const ch of state.showfile.channels) out[ch.id] = 0
@@ -3075,6 +3143,13 @@ function createServices(app) {
       updatedAt: captureMeterState.updatedAt,
       receiving,
       levelsByIndex: captureMeterState.levelsByIndex || {},
+    })
+  })
+  ex.get('/api/audio-spectrum', authMiddleware, (_req, res) => {
+    res.json({
+      frequencies: spectrumState.frequencies || [],
+      magnitudes: spectrumState.magnitudes || [],
+      updatedAt: spectrumState.updatedAt,
     })
   })
   ex.get('/api/fx-levels', authMiddleware, (req, res) => {
@@ -4792,6 +4867,9 @@ function createServices(app) {
       captureMeterTick += 1
       if (captureMeterTick % 3 === 0) {
         updateCaptureMeters(capBlock, nCh)
+      }
+      if (captureMeterTick % 6 === 0) {
+        updateSpectrumAnalysis(capBlock, nCh)
       }
     } else {
       decayCaptureMeters(nCh)
