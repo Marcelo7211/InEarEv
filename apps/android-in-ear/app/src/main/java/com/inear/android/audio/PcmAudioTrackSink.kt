@@ -55,7 +55,10 @@ class PcmAudioTrackSink(private val sampleRate: Int = 48_000) {
             val useLowLatencyHardware: Boolean
             when (latencyProfile) {
                 "provocal" -> {
-                    maxQueuedAudioMs = 12
+                    // 6 ms keeps the AudioTrack fed on 5 GHz LAN while halving
+                    // the application-queue contribution to end-to-end latency
+                    // compared to the previous 12 ms value.
+                    maxQueuedAudioMs = 6
                     maxQueuedFramesCap = 2
                     bufBytes = minBuf
                     useLowLatencyHardware = true
@@ -69,7 +72,9 @@ class PcmAudioTrackSink(private val sampleRate: Int = 48_000) {
                     writerWaitMs = 4L
                 }
                 "pro" -> {
-                    maxQueuedAudioMs = 16
+                    // 10 ms: tighter than the previous 16 ms, still provides
+                    // enough cushion for typical 5 GHz WiFi jitter.
+                    maxQueuedAudioMs = 10
                     maxQueuedFramesCap = 2
                     bufBytes = minBuf
                     useLowLatencyHardware = true

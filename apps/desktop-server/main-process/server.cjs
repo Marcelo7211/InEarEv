@@ -1828,7 +1828,32 @@ function createServices(app) {
   let audioSeq = 0
   let sampleClock = 0
   let audioTimeout = null
+  let audioTimeoutIsImmediate = false
   let nextAudioTickAt = Date.now()
+
+  function scheduleNextAudioTick(delayMs) {
+    // On Windows, setTimeout has ~15 ms resolution (system timer default).
+    // When the tick is behind schedule (delay ≤ 0) or the delay is below the
+    // OS timer granularity (~1 ms), use setImmediate instead so catch-up ticks
+    // run on the very next event-loop iteration — cutting effective ring-buffer
+    // latency from ~15 ms to < 1 ms on Windows.
+    if (delayMs <= 1) {
+      audioTimeout = setImmediate(audioTick)
+      audioTimeoutIsImmediate = true
+    } else {
+      audioTimeout = setTimeout(audioTick, delayMs)
+      audioTimeoutIsImmediate = false
+    }
+  }
+
+  function cancelAudioTimeout() {
+    if (audioTimeout) {
+      if (audioTimeoutIsImmediate) clearImmediate(audioTimeout)
+      else clearTimeout(audioTimeout)
+      audioTimeout = null
+      audioTimeoutIsImmediate = false
+    }
+  }
 
   function audioBlockSamples() {
     const configured = clampAudioBlockSamples(state.audioBlockSamples)
@@ -5185,13 +5210,13 @@ function createServices(app) {
     if (nextAudioTickAt < now - delay * 3) {
       nextAudioTickAt = now + delay
     }
-    audioTimeout = setTimeout(audioTick, Math.max(0, nextAudioTickAt - now))
+    scheduleNextAudioTick(Math.max(0, nextAudioTickAt - now))
   }
   nextAudioTickAt = Date.now() + (1000 * audioBlockSamples()) / MVP_SAMPLE_RATE_HZ
   audioTick()
 
   function shutdown() {
-    if (audioTimeout) clearTimeout(audioTimeout)
+    cancelAudioTimeout()
     stopCaptureChild()
     try {
       wss.clients.forEach((c) => c.close())
