@@ -2581,9 +2581,10 @@ function createServices(app) {
   function startCaptureIfConfigured() {
     stopCaptureChild()
     captureUnderruns = 0
-    // Initialise ring buffer size ONCE here, before ffmpeg starts pushing chunks.
-    // This prevents the hot-path reset bug (see syncCaptureRingSize / pushCaptureChunk).
-    syncCaptureRingSize(audioBlockSamples(), normalizeCaptureChannelCount())
+    // syncCaptureRingSize() is called right before each captureChild spawn below,
+    // AFTER the channel-count probing has updated state.captureChannelCount.
+    // Calling it here (before probing) would size the ring with the wrong nCh
+    // and cause constant underruns when ffmpeg delivers multi-channel data.
 
     const cmd = process.env.INEAR_CAPTURE_CMD
     if (cmd && String(cmd).trim()) {
@@ -2603,6 +2604,7 @@ function createServices(app) {
         captureDeviceIndex: null,
         ffmpegPath: String(cmd),
       })
+      syncCaptureRingSize(audioBlockSamples(), normalizeCaptureChannelCount())
       captureChild.stdout.on('data', pushCaptureChunk)
       return
     }
@@ -2670,6 +2672,7 @@ function createServices(app) {
             captureDeviceIndex: n,
             ffmpegPath: ffmpeg,
           })
+          syncCaptureRingSize(audioBlockSamples(), normalizeCaptureChannelCount())
           captureChild.stdout.on('data', pushCaptureChunk)
           return
         }
@@ -2749,6 +2752,7 @@ function createServices(app) {
             captureDeviceIndex: null,
             ffmpegPath: ffmpeg,
           })
+          syncCaptureRingSize(audioBlockSamples(), normalizeCaptureChannelCount())
           captureChild.stdout.on('data', pushCaptureChunk)
           return
         }
@@ -2844,6 +2848,7 @@ function createServices(app) {
               captureDeviceIndex: n,
               ffmpegPath: ffmpeg,
             })
+            syncCaptureRingSize(audioBlockSamples(), normalizeCaptureChannelCount())
             captureChild.stdout.on('data', pushCaptureChunk)
             return
           }
