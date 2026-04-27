@@ -2135,7 +2135,10 @@ function createServices(app) {
           ? 10
           : hasActiveWebRtcLatencyProfile('pro')
             ? 14
-            : 40
+            // Reduced from 40 ms → 20 ms: safe for USB multi-channel interfaces
+            // (UI24R 32ch) even without an active WebRTC session, while still
+            // giving ~7 block-widths of OS-scheduling headroom at 128 frames/48 kHz.
+            : 20
         : 80
     const targetBytes = Math.round((MVP_SAMPLE_RATE_HZ * bytesPerFrame * targetMs) / 1000)
     return Math.max(minBlockBytes * 2, targetBytes)
@@ -2711,14 +2714,17 @@ function createServices(app) {
           const audioDeviceNumber = Number.isFinite(Number(audioDeviceNumberRaw))
             ? Math.max(0, Math.floor(Number(audioDeviceNumberRaw)))
             : null
-          const defaultDshowAudioBufferMs = 20
+          // Reduced from 20 ms → 10 ms to match single-device mode.
+          // USB multi-channel interfaces (e.g. UI24R 32ch) handle 10 ms reliably;
+          // override with INEAR_DSHOW_AUDIO_BUFFER_MS if a specific device needs more.
+          const defaultDshowAudioBufferMs = 10
           const dshowAudioBufferMsRaw = Number(
             String(process.env.INEAR_DSHOW_AUDIO_BUFFER_MS || '').trim() || String(defaultDshowAudioBufferMs),
           )
           const dshowAudioBufferMs =
             Number.isFinite(dshowAudioBufferMsRaw) && dshowAudioBufferMsRaw >= 0
               ? Math.max(0, Math.min(500, Math.floor(dshowAudioBufferMsRaw)))
-              : 20
+              : 10
           const aggArgs = buildWin32DshowAggregateFfmpegArgs({
             deviceNames: aggVal.names,
             dshowAudioBufferMs,
