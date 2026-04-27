@@ -4488,6 +4488,8 @@ function MusicianControls({
   const fxModalBypassed = fxModalChannelId
     ? Boolean(musician.fxBypassByChannel?.[fxModalChannelId])
     : false
+  const rtaSpectrum = spectrumData
+  const rtaEnabled = showRta
 
   const patchMusician = useCallback(
     async (body: Record<string, unknown>) => {
@@ -4880,9 +4882,9 @@ function MusicianControls({
         peq={fxModalPeq as { enabled?: boolean; bands?: PeqBandUi[] } | null}
         comp={(masterComp as CompressorUi | undefined) ?? null}
         bypassed={fxModalBypassed}
-        spectrum={spectrumData as any}
-        showRta={showRta as any}
-        onToggleRta={setShowRta as any}
+        spectrum={rtaSpectrum}
+        showRta={rtaEnabled}
+        onToggleRta={setShowRta}
         onClose={() => setFxModalChannelId(null)}
         onPeqCommit={(next) => {
           if (!fxModalChannelId) return
