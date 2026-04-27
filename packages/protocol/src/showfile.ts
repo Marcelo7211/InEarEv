@@ -74,6 +74,32 @@ export interface CompressorSettings {
   makeupDb: number
 }
 
+export interface DelaySettings {
+  enabled: boolean
+  /** Tempo do tap em milissegundos (ex.: 80–600). */
+  timeMs: number
+  /** 0..0.95 — quanto do delayed sai retorna ao buffer. */
+  feedback: number
+  /** 0..1 — mistura wet (1 = só delay, 0 = só dry). */
+  mix: number
+  /** Ganho final do retorno do delay (dB), -inf..+6. */
+  outputDb: number
+}
+
+export interface ReverbSettings {
+  enabled: boolean
+  /** "Tamanho" da sala 0..1 (controla o decay médio). */
+  size: number
+  /** Decay (segundos aproximados) 0.2..6. */
+  decayS: number
+  /** 0..1 — amortecimento de altas (mais alto = mais escuro). */
+  damping: number
+  /** 0..1 — mistura wet. */
+  mix: number
+  /** Pré-delay antes da reverberação (ms). */
+  preDelayMs: number
+}
+
 export interface MusicianStrip {
   id: string
   name: string
@@ -88,8 +114,14 @@ export interface MusicianStrip {
   /** EQ por canal só neste ouvido / telemóvel (mistura individual). Chave = channel id. */
   eqByChannel?: Record<string, Eq3>
   peqByChannel?: Record<string, PeqSettings>
+  /** Quando true, ignora PEQ (e qualquer FX por canal) — manda PCM cru no send. Chave = channel id. */
+  fxBypassByChannel?: Record<string, boolean>
   masterComp?: CompressorSettings
   masterEq?: PeqSettings
+  /** Delay no bus deste músico antes do envio para o fone. */
+  masterDelay?: DelaySettings
+  /** Reverb no bus deste músico antes do envio para o fone. */
+  masterReverb?: ReverbSettings
 }
 
 export interface Showfile {
@@ -226,6 +258,9 @@ export function migrateShowfile(sf: Showfile): Showfile {
     if (!m.peqByChannel || typeof m.peqByChannel !== 'object') {
       m.peqByChannel = {}
     }
+    if (!m.fxBypassByChannel || typeof m.fxBypassByChannel !== 'object') {
+      m.fxBypassByChannel = {}
+    }
     if (!m.sendMutes || typeof m.sendMutes !== 'object') {
       m.sendMutes = {}
     }
@@ -238,6 +273,25 @@ export function migrateShowfile(sf: Showfile): Showfile {
         releaseMs: 120,
         kneeDb: 3,
         makeupDb: 0,
+      }
+    }
+    if (!m.masterDelay || typeof m.masterDelay !== 'object') {
+      m.masterDelay = {
+        enabled: false,
+        timeMs: 220,
+        feedback: 0.3,
+        mix: 0.25,
+        outputDb: 0,
+      }
+    }
+    if (!m.masterReverb || typeof m.masterReverb !== 'object') {
+      m.masterReverb = {
+        enabled: false,
+        size: 0.5,
+        decayS: 1.4,
+        damping: 0.45,
+        mix: 0.2,
+        preDelayMs: 12,
       }
     }
     const explicit =

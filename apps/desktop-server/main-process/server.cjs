@@ -3854,6 +3854,27 @@ function createServices(app) {
     }
   }
 
+  function sanitizeDelaySettings(raw) {
+    return {
+      enabled: Boolean(raw?.enabled),
+      timeMs: clampNumber(raw?.timeMs, 5, 1500, 220),
+      feedback: clampNumber(raw?.feedback, 0, 0.95, 0.3),
+      mix: clampNumber(raw?.mix, 0, 1, 0.25),
+      outputDb: clampNumber(raw?.outputDb, -24, 6, 0),
+    }
+  }
+
+  function sanitizeReverbSettings(raw) {
+    return {
+      enabled: Boolean(raw?.enabled),
+      size: clampNumber(raw?.size, 0, 1, 0.5),
+      decayS: clampNumber(raw?.decayS, 0.2, 6, 1.4),
+      damping: clampNumber(raw?.damping, 0, 1, 0.45),
+      mix: clampNumber(raw?.mix, 0, 1, 0.2),
+      preDelayMs: clampNumber(raw?.preDelayMs, 0, 200, 12),
+    }
+  }
+
   ex.patch('/api/showfile/musician/:id', authMiddleware, (req, res) => {
     const m = state.showfile.musicians.find((x) => x.id === req.params.id)
     if (!m) return res.status(404).json({ error: 'not_found' })
@@ -3875,11 +3896,22 @@ function createServices(app) {
       if (b.peqByChannel && typeof b.peqByChannel === 'object') {
         m.peqByChannel = { ...(m.peqByChannel || {}), ...sanitizePeqByChannel(b.peqByChannel) }
       }
+      if (b.fxBypassByChannel && typeof b.fxBypassByChannel === 'object') {
+        const merged = { ...(m.fxBypassByChannel || {}) }
+        for (const [k, v] of Object.entries(b.fxBypassByChannel)) merged[String(k)] = !!v
+        m.fxBypassByChannel = merged
+      }
       if (b.masterComp && typeof b.masterComp === 'object') {
         m.masterComp = sanitizeCompressorSettings(b.masterComp)
       }
       if (b.masterEq && typeof b.masterEq === 'object') {
         m.masterEq = sanitizePeqSettings(b.masterEq)
+      }
+      if (b.masterDelay && typeof b.masterDelay === 'object') {
+        m.masterDelay = sanitizeDelaySettings(b.masterDelay)
+      }
+      if (b.masterReverb && typeof b.masterReverb === 'object') {
+        m.masterReverb = sanitizeReverbSettings(b.masterReverb)
       }
     } else if (req.user.role === 'musician') {
       const self = findMusicianByUsername(req.user.sub)
@@ -3898,11 +3930,22 @@ function createServices(app) {
       if (body.peqByChannel && typeof body.peqByChannel === 'object') {
         m.peqByChannel = { ...(m.peqByChannel || {}), ...sanitizePeqByChannel(body.peqByChannel) }
       }
+      if (body.fxBypassByChannel && typeof body.fxBypassByChannel === 'object') {
+        const merged = { ...(m.fxBypassByChannel || {}) }
+        for (const [k, v] of Object.entries(body.fxBypassByChannel)) merged[String(k)] = !!v
+        m.fxBypassByChannel = merged
+      }
       if (body.masterComp && typeof body.masterComp === 'object') {
         m.masterComp = sanitizeCompressorSettings(body.masterComp)
       }
       if (body.masterEq && typeof body.masterEq === 'object') {
         m.masterEq = sanitizePeqSettings(body.masterEq)
+      }
+      if (body.masterDelay && typeof body.masterDelay === 'object') {
+        m.masterDelay = sanitizeDelaySettings(body.masterDelay)
+      }
+      if (body.masterReverb && typeof body.masterReverb === 'object') {
+        m.masterReverb = sanitizeReverbSettings(body.masterReverb)
       }
     } else {
       return res.status(403).json({ error: 'forbidden' })
@@ -4451,7 +4494,12 @@ function createServices(app) {
   function getFxRuntimeForMusician(musicianId) {
     let rt = fxRuntimeByMusician.get(musicianId)
     if (!rt) {
-      rt = { peqByChannel: new Map(), comp: { g: 1 } }
+      rt = {
+        peqByChannel: new Map(),
+        comp: { g: 1 },
+        delay: { bufL: null, bufR: null, idx: 0, capacity: 0 },
+        reverb: { combs: null, allpasses: null, lpL: 0, lpR: 0, preL: null, preR: null, preIdx: 0, preLen: 0 },
+      }
       fxRuntimeByMusician.set(musicianId, rt)
     }
     return rt
@@ -4500,6 +4548,179 @@ function createServices(app) {
 
   function dbToLinearSafe(db) {
     return Math.pow(10, (Number(db) || 0) / 20)
+  }
+
+  /**
+   * Delay estéreo simples por musician (ring buffer).
+   * Tap único em timeMs com feedback e mistura wet/dry.
+   * Retorna { l, r }.
+   */
+  function delayStereo(musicianId, l, r, cfg) {
+    if (!cfg || cfg.enabled !== true) return { l, r }
+    const sr = MVP_SAMPLE_RATE_HZ
+    const rt = getFxRuntimeForMusician(musicianId)
+    const st = rt.delay
+    const timeMs = clampFxNumber(cfg.timeMs, 5, 1500, 220)
+    const need = Math.max(8, Math.round((timeMs * sr) / 1000))
+    if (!st.bufL || st.capacity < need) {
+      // aloca com folga (até 1500 ms) para não realocar com mudanças.
+      const cap = Math.max(need, Math.round((1500 * sr) / 1000))
+      const newL = new Float32Array(cap)
+      const newR = new Float32Array(cap)
+      // copia conteúdo antigo se houver (preserva trail).
+      if (st.bufL && st.capacity > 0) {
+        const copyLen = Math.min(st.capacity, cap)
+        for (let i = 0; i < copyLen; i++) {
+          const src = (st.idx - copyLen + i + st.capacity) % st.capacity
+          newL[i] = st.bufL[src] || 0
+          newR[i] = st.bufR[src] || 0
+        }
+        st.idx = copyLen % cap
+      } else {
+        st.idx = 0
+      }
+      st.bufL = newL
+      st.bufR = newR
+      st.capacity = cap
+    }
+    const fb = clampFxNumber(cfg.feedback, 0, 0.95, 0.3)
+    const mix = clampFxNumber(cfg.mix, 0, 1, 0.25)
+    const outGain = dbToLinearSafe(clampFxNumber(cfg.outputDb, -24, 6, 0))
+    const cap = st.capacity
+    const readIdx = (st.idx - need + cap) % cap
+    const dl = st.bufL[readIdx] || 0
+    const dr = st.bufR[readIdx] || 0
+    // grava o input + feedback do delayed.
+    st.bufL[st.idx] = l + dl * fb
+    st.bufR[st.idx] = r + dr * fb
+    st.idx = (st.idx + 1) % cap
+    const wetL = dl * outGain
+    const wetR = dr * outGain
+    const outL = l * (1 - mix) + wetL * mix
+    const outR = r * (1 - mix) + wetR * mix
+    return { l: outL, r: outR }
+  }
+
+  /**
+   * Reverb estéreo leve estilo Schroeder/Freeverb minimalista:
+   * 4 comb filters em paralelo + 2 allpass em série, com damping low-pass por comb.
+   * Pré-delay opcional. Configurações: size, decayS, damping, mix, preDelayMs.
+   */
+  function reverbStereo(musicianId, l, r, cfg) {
+    if (!cfg || cfg.enabled !== true) return { l, r }
+    const sr = MVP_SAMPLE_RATE_HZ
+    const rt = getFxRuntimeForMusician(musicianId)
+    const st = rt.reverb
+    const size = clampFxNumber(cfg.size, 0, 1, 0.5)
+    const decayS = clampFxNumber(cfg.decayS, 0.2, 6, 1.4)
+    const damping = clampFxNumber(cfg.damping, 0, 1, 0.45)
+    const mix = clampFxNumber(cfg.mix, 0, 1, 0.2)
+    const preDelayMs = clampFxNumber(cfg.preDelayMs, 0, 200, 12)
+
+    // Comprimentos primos relativos para os combs (em samples a 48 kHz).
+    // Escalamos por size: lengths × (0.7 + size*0.6) ≈ 0.7..1.3.
+    const sizeFactor = 0.7 + size * 0.6
+    const baseCombs = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617]
+    const baseAllpass = [225, 556, 441, 341]
+    const combLensL = baseCombs.slice(0, 4).map((n) => Math.max(8, Math.round(n * (sr / 44100) * sizeFactor)))
+    const combLensR = baseCombs.slice(4, 8).map((n) => Math.max(8, Math.round(n * (sr / 44100) * sizeFactor)))
+    const apLensL = baseAllpass.slice(0, 2).map((n) => Math.max(8, Math.round(n * (sr / 44100))))
+    const apLensR = baseAllpass.slice(2, 4).map((n) => Math.max(8, Math.round(n * (sr / 44100))))
+
+    if (!st.combs || st.combs.length === 0 || st.combs[0].lenL !== combLensL[0]) {
+      // (re)aloca combs/allpasses
+      st.combs = combLensL.map((lenL, i) => ({
+        lenL,
+        lenR: combLensR[i],
+        bufL: new Float32Array(lenL),
+        bufR: new Float32Array(combLensR[i]),
+        idxL: 0,
+        idxR: 0,
+        lpL: 0,
+        lpR: 0,
+      }))
+      st.allpasses = apLensL.map((lenL, i) => ({
+        lenL,
+        lenR: apLensR[i],
+        bufL: new Float32Array(lenL),
+        bufR: new Float32Array(apLensR[i]),
+        idxL: 0,
+        idxR: 0,
+      }))
+    }
+
+    // pré-delay
+    const preLen = Math.max(0, Math.round((preDelayMs * sr) / 1000))
+    if (preLen !== st.preLen) {
+      st.preLen = preLen
+      st.preL = preLen > 0 ? new Float32Array(preLen) : null
+      st.preR = preLen > 0 ? new Float32Array(preLen) : null
+      st.preIdx = 0
+    }
+    let inL = l
+    let inR = r
+    if (preLen > 0) {
+      const oL = st.preL[st.preIdx] || 0
+      const oR = st.preR[st.preIdx] || 0
+      st.preL[st.preIdx] = l
+      st.preR[st.preIdx] = r
+      st.preIdx = (st.preIdx + 1) % preLen
+      inL = oL
+      inR = oR
+    }
+
+    // feedback dos combs derivado de decayS e tamanho médio dos combs
+    const meanLen = (combLensL[0] + combLensL[1] + combLensL[2] + combLensL[3]) / 4
+    const meanS = meanLen / sr
+    // gain por iteração para alcançar -60 dB em decayS:
+    const fb = Math.pow(10, (-3 * meanS) / Math.max(0.05, decayS))
+    const fbClamped = Math.min(0.96, Math.max(0, fb))
+
+    // combs L+R (4 cada). damping: low-pass dentro do comb.
+    let outL = 0
+    let outR = 0
+    const dampLP = 1 - Math.min(0.95, Math.max(0, damping))
+    for (const c of st.combs) {
+      // L
+      const yL = c.bufL[c.idxL] || 0
+      c.lpL = yL * dampLP + c.lpL * (1 - dampLP)
+      const writeL = inL + c.lpL * fbClamped
+      c.bufL[c.idxL] = writeL
+      c.idxL = (c.idxL + 1) % c.lenL
+      outL += yL
+      // R
+      const yR = c.bufR[c.idxR] || 0
+      c.lpR = yR * dampLP + c.lpR * (1 - dampLP)
+      const writeR = inR + c.lpR * fbClamped
+      c.bufR[c.idxR] = writeR
+      c.idxR = (c.idxR + 1) % c.lenR
+      outR += yR
+    }
+    outL *= 0.25
+    outR *= 0.25
+
+    // allpasses em série (difusão)
+    const apFb = 0.5
+    for (const a of st.allpasses) {
+      const yL = a.bufL[a.idxL] || 0
+      const wL = outL + yL * apFb
+      a.bufL[a.idxL] = wL
+      a.idxL = (a.idxL + 1) % a.lenL
+      outL = -wL * apFb + yL
+
+      const yR = a.bufR[a.idxR] || 0
+      const wR = outR + yR * apFb
+      a.bufR[a.idxR] = wR
+      a.idxR = (a.idxR + 1) % a.lenR
+      outR = -wR * apFb + yR
+    }
+
+    const wetL = outL
+    const wetR = outR
+    return {
+      l: l * (1 - mix) + wetL * mix,
+      r: r * (1 - mix) + wetR * mix,
+    }
   }
 
   function compressStereo(musicianId, l, r, cfg) {
@@ -4637,6 +4858,8 @@ function createServices(app) {
             return mult[sourceId] ?? 1
           },
           transformSourceMono(sourceId, mono) {
+            // Bypass por canal: pula PEQ desse canal e devolve PCM cru.
+            if (t.mStrip.fxBypassByChannel?.[sourceId]) return mono
             const peq = t.mStrip.peqByChannel?.[sourceId]
             return peq ? peqProcessMono(t.musicianId, sourceId, mono, peq) : mono
           },
@@ -4713,7 +4936,10 @@ function createServices(app) {
           const mixed = mixMusicianStereoFromMonoSources(sf, t.mStrip, monoById, t.mixOptions)
           const prePeak = Math.max(Math.abs(mixed.l), Math.abs(mixed.r))
           if (prePeak > t.fxLevels.prePeak) t.fxLevels.prePeak = prePeak
-          const comp = compressStereo(t.musicianId, mixed.l, mixed.r, t.mStrip.masterComp)
+          // Cadeia de FX bus: delay → reverb → compressor.
+          const dly = delayStereo(t.musicianId, mixed.l, mixed.r, t.mStrip.masterDelay)
+          const rvb = reverbStereo(t.musicianId, dly.l, dly.r, t.mStrip.masterReverb)
+          const comp = compressStereo(t.musicianId, rvb.l, rvb.r, t.mStrip.masterComp)
           const postPeak = Math.max(Math.abs(comp.l), Math.abs(comp.r))
           if (postPeak > t.fxLevels.postPeak) t.fxLevels.postPeak = postPeak
           if (comp.grDb > t.fxLevels.grDb) t.fxLevels.grDb = comp.grDb
@@ -4728,7 +4954,9 @@ function createServices(app) {
           const mixed = mixMusicianStereoFromMonoSources(sf, t.mStrip, mono, t.mixOptions)
           const prePeak = Math.max(Math.abs(mixed.l), Math.abs(mixed.r))
           if (prePeak > t.fxLevels.prePeak) t.fxLevels.prePeak = prePeak
-          const comp = compressStereo(t.musicianId, mixed.l, mixed.r, t.mStrip.masterComp)
+          const dly = delayStereo(t.musicianId, mixed.l, mixed.r, t.mStrip.masterDelay)
+          const rvb = reverbStereo(t.musicianId, dly.l, dly.r, t.mStrip.masterReverb)
+          const comp = compressStereo(t.musicianId, rvb.l, rvb.r, t.mStrip.masterComp)
           const postPeak = Math.max(Math.abs(comp.l), Math.abs(comp.r))
           if (postPeak > t.fxLevels.postPeak) t.fxLevels.postPeak = postPeak
           if (comp.grDb > t.fxLevels.grDb) t.fxLevels.grDb = comp.grDb

@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
 } from 'react'
 import { api, getApiBase } from './api'
 import type { ChannelStrip, MusicianStrip, Showfile } from '@inear/protocol'
@@ -16,6 +17,8 @@ import {
   MVP_MAX_CAPTURE_CHANNELS,
   retornoMixerChannelOrder,
 } from '@inear/protocol'
+import { type PeqBandUi } from './components/PeqGraph'
+import { FxModal, type CompressorUi } from './components/FxModal'
 
 type Role = 'admin' | 'musician'
 
@@ -918,42 +921,105 @@ export function AdminApp() {
         .deskInfoPill__label{
           color:#7f93ab;font-size:11px;text-transform:uppercase;letter-spacing:.08em;
         }
+        /* Mesa do músico — espelha o visual da mesa do técnico (chCard padrão).
+           Padronizamos largura, badge grande, área de send com altura mínima
+           confortável e coluna FX (EQ/BYP) slim ao lado do fader. */
         .chBoard.musicianDeskBoard{
-          min-height:260px;
+          min-height:340px;
           align-items:stretch;
         }
         .chBoard.musicianDeskBoard .chCard{
-          width:min(158px, 92vw);padding:4px 5px;gap:4px;border-radius:7px;
+          width:min(184px, 92vw);
+          padding:18px 8px 9px;
+          gap:8px;
+          border-radius:8px;
         }
-        .chBoard.musicianDeskBoard .chCard__hdr{gap:4px;}
+        .chBoard.musicianDeskBoard .chCard__hdr{
+          gap:8px;
+          padding:6px 8px;
+        }
+        /* Ícone do instrumento — grande, dá pra ver de longe. */
         .chBoard.musicianDeskBoard .chCard__badge{
-          width:22px;height:22px;border-radius:6px;font-size:10px;
+          width:42px;height:42px;border-radius:8px;
+          font-size:22px;line-height:1;
         }
-        .chBoard.musicianDeskBoard .chCard__titles strong{font-size:10px;}
-        .chBoard.musicianDeskBoard .chCard__titles small{font-size:8px;}
+        .chBoard.musicianDeskBoard .chCard__badge--muted::after{
+          height:32px;width:3px;
+        }
+        .chBoard.musicianDeskBoard .chCard__titles strong{
+          font-size:12px;line-height:1.2;
+        }
+        .chBoard.musicianDeskBoard .chCard__titles small{
+          font-size:9px;line-height:1.25;
+        }
+        /* Layout do mix: send (volCard) flexível + coluna FX slim ao lado. */
         .chBoard.musicianDeskBoard .chCard__mixRow{
-          grid-template-columns:minmax(20px, max-content) minmax(32px, max-content);
-          column-gap:4px;
+          grid-template-columns:1fr minmax(40px, 44px);
+          column-gap:6px;
+          min-height:260px;
         }
         .chBoard.musicianDeskBoard .chCard__mixRow--soloVol{
-          grid-template-columns:minmax(20px, max-content);
+          grid-template-columns:1fr;
         }
-        .chBoard.musicianDeskBoard .eqKnob{
-          width:34px;padding:3px 2px;border-radius:6px;gap:1px;
-        }
-        .chBoard.musicianDeskBoard .eqKnob__label{font-size:8px;}
-        .chBoard.musicianDeskBoard .eqKnob__dial{width:28px;height:28px;}
-        .chBoard.musicianDeskBoard .eqKnob__dial::after{height:9px;width:2px;}
-        .chBoard.musicianDeskBoard .eqKnob__value{font-size:7px;padding:1px 2px;}
+        /* Send (fader + VU) ocupa toda a largura disponível e altura confortável. */
         .chBoard.musicianDeskBoard .volCard{
-          max-width:72px;padding:4px 2px 5px;border-radius:5px;
+          max-width:none;width:100%;
+          padding:6px 4px 8px;
+          border-radius:6px;
+          min-height:260px;
         }
-        .chBoard.musicianDeskBoard .volCard__vuCol{width:26px;}
+        .chBoard.musicianDeskBoard .volCard__vuCol{width:30px;}
         .chBoard.musicianDeskBoard .volCard__vuMeter{
-          flex:0 0 11px;width:11px;max-width:14px;
+          flex:0 0 13px;width:13px;max-width:16px;
         }
         .chBoard.musicianDeskBoard .volCard__fader{
-          flex:0 0 30px;width:30px;min-width:30px;margin-left:10px;
+          flex:0 0 36px;width:36px;min-width:36px;margin-left:12px;
+        }
+        /* Coluna FX: EQ / BYP em strips verticais finos. */
+        .chBoard.musicianDeskBoard .fxBtnCol{
+          display:flex;flex-direction:column;
+          align-items:stretch;justify-content:flex-start;
+          gap:6px;width:100%;height:100%;
+          padding-top:2px;
+        }
+        .chBoard.musicianDeskBoard .fxBtnSlim{
+          flex:1;
+          width:100%;
+          padding:6px 2px;
+          border-radius:5px;
+          border:1px solid #1e2a3c;
+          background:linear-gradient(180deg,#0c1320 0%,#070b13 100%);
+          color:#9caec6;
+          cursor:pointer;
+          display:flex;flex-direction:column;
+          align-items:center;justify-content:center;
+          gap:6px;
+          font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+          font-weight:900;letter-spacing:.18em;font-size:10px;
+          touch-action:manipulation;user-select:none;
+          box-shadow:inset 0 1px 0 rgba(255,255,255,.04), inset 0 -1px 0 rgba(0,0,0,.6);
+          transition:background-color .12s ease, border-color .12s ease;
+        }
+        .chBoard.musicianDeskBoard .fxBtnSlim:hover{
+          background:linear-gradient(180deg,#101826 0%,#0a1018 100%);
+        }
+        .chBoard.musicianDeskBoard .fxBtnSlim__label{
+          writing-mode:vertical-rl;
+          transform:rotate(180deg);
+          text-orientation:mixed;
+        }
+        .chBoard.musicianDeskBoard .fxBtnSlim__led{
+          width:6px;height:6px;border-radius:999px;
+          background:#1c2531;
+        }
+        .chBoard.musicianDeskBoard .fxBtnSlim--on{
+          background:linear-gradient(180deg, color-mix(in srgb, var(--fx-color, #39ff14) 18%, #0c1320) 0%, #070b13 100%);
+          border-color:var(--fx-color, #39ff14);
+          color:var(--fx-color, #39ff14);
+        }
+        .chBoard.musicianDeskBoard .fxBtnSlim--on .fxBtnSlim__led{
+          background:var(--fx-color, #39ff14);
+          box-shadow:0 0 6px var(--fx-color, #39ff14);
         }
         .musicianProfilesScroll{
           max-height:min(310px, 42vh);
@@ -964,8 +1030,13 @@ export function AdminApp() {
           overscroll-behavior-y:contain;
           display:flex;
           flex-direction:column;
-          gap:12px;
-          padding:4px 12px 8px 2px;
+          gap:10px;
+          padding:4px 8px 8px 2px;
+        }
+        /* No grid lado a lado, deixar o card de perfis crescer junto com o vizinho. */
+        .musicianProfilesScroll--flex{
+          flex:1 1 auto;
+          max-height:none;
         }
         .musicianProfileCard{
           scroll-snap-align:start;
@@ -3149,6 +3220,46 @@ function DeskVolumeStrip({
   )
 }
 
+/** Coluna no channel strip do Admin com botões slim EQ (abre modal) e BYP. */
+function FxButtonsCol({
+  accent,
+  bypassed,
+  peqEnabled,
+  onOpenFx,
+  onToggleBypass,
+}: {
+  accent: string
+  bypassed: boolean
+  peqEnabled: boolean
+  onOpenFx: () => void
+  onToggleBypass: () => void
+}) {
+  return (
+    <div className="fxBtnCol">
+      <button
+        type="button"
+        onClick={onOpenFx}
+        title="Abrir EQ paramétrico deste canal"
+        className={`fxBtnSlim${peqEnabled ? ' fxBtnSlim--on' : ''}`}
+        style={{ ['--fx-color' as string]: accent } as CSSProperties}
+      >
+        <span className="fxBtnSlim__label">EQ</span>
+        <span className="fxBtnSlim__led" />
+      </button>
+      <button
+        type="button"
+        onClick={onToggleBypass}
+        title="Bypass: envia o som original ao fone (sem PEQ/FX)"
+        className={`fxBtnSlim${bypassed ? ' fxBtnSlim--on' : ''}`}
+        style={{ ['--fx-color' as string]: '#ffb020' } as CSSProperties}
+      >
+        <span className="fxBtnSlim__label">BYP</span>
+        <span className="fxBtnSlim__led" />
+      </button>
+    </div>
+  )
+}
+
 function ChannelVolumeStrip({
   token,
   channelId,
@@ -3621,9 +3732,9 @@ function MusicianTable({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'minmax(300px, 380px) minmax(0, 1fr)',
+          gridTemplateColumns: 'minmax(300px, 360px) minmax(0, 1fr)',
           gap: 16,
-          alignItems: 'start',
+          alignItems: 'stretch',
           minWidth: 0,
           maxWidth: '100%',
         }}
@@ -3633,108 +3744,64 @@ function MusicianTable({
             ...ui.card,
             display: 'flex',
             flexDirection: 'column',
-            alignSelf: 'start',
             maxWidth: '100%',
+            minHeight: 0,
+            padding: 14,
           }}
         >
-          <h2 style={{ marginTop: 0, flexShrink: 0 }}>Perfis de músicos</h2>
-          <div className="musicianProfilesScroll">
-            {showfile.musicians.map((m) => (
-              <div
-                key={m.id}
-                className="musicianProfileCard"
-                style={{
-                  border: selectedMusician?.id === m.id ? '1px solid #6cb6ff' : '1px solid #33455d',
-                  borderRadius: 12,
-                  padding: '12px 12px 14px',
-                  background: selectedMusician?.id === m.id ? '#13263e' : '#121b28',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                  <div>
-                    <strong>{m.name}</strong>
-                    <div style={{ color: '#9aa0a6', fontSize: 13 }}>{m.username}</div>
-                  </div>
-                  <button
-                    type="button"
-                    style={selectedMusician?.id === m.id ? ui.btn : ui.btnGhost}
-                    onClick={() => setSelectedMusicianId(m.id)}
-                  >
-                    Abrir mix
-                  </button>
-                </div>
-                <div style={{ display: 'grid', gap: 9, marginTop: 12 }}>
-                  <input
-                    value={editName[m.id] ?? m.name}
-                    onChange={(e) =>
-                      setEditName((prev) => ({ ...prev, [m.id]: e.target.value }))
-                    }
-                    placeholder="Nome"
-                    style={ui.input}
-                  />
-                  <input
-                    value={editUsername[m.id] ?? m.username}
-                    onChange={(e) =>
-                      setEditUsername((prev) => ({ ...prev, [m.id]: e.target.value }))
-                    }
-                    placeholder="Usuário"
-                    style={ui.input}
-                  />
-                  <input
-                    type="password"
-                    value={editPassword[m.id] ?? ''}
-                    onChange={(e) =>
-                      setEditPassword((prev) => ({ ...prev, [m.id]: e.target.value }))
-                    }
-                    placeholder="Nova senha (opcional)"
-                    style={ui.input}
-                  />
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <button
-                      type="button"
-                      style={ui.btn}
-                      onClick={async () => {
-                        await api(`/api/admin/musicians/${m.id}`, {
-                          method: 'PATCH',
-                          token,
-                          body: JSON.stringify({
-                            name: editName[m.id] ?? m.name,
-                            username: editUsername[m.id] ?? m.username,
-                            password: editPassword[m.id] ?? '',
-                          }),
-                        })
-                        setEditPassword((prev) => ({ ...prev, [m.id]: '' }))
-                        onSaved()
-                      }}
-                    >
-                      Salvar perfil
-                    </button>
-                    <label style={{ color: '#c9d1d9' }}>
-                      <input
-                        type="checkbox"
-                        checked={m.mute}
-                        onChange={async (e) => {
-                          const next = await api<MusicianStrip>(
-                            `/api/showfile/musician/${m.id}`,
-                            {
-                              method: 'PATCH',
-                              token,
-                              body: JSON.stringify({ mute: e.target.checked }),
-                            },
-                          )
-                          onMusicianStripPatched?.(next)
-                        }}
-                      />{' '}
-                      mutar músico
-                    </label>
-                  </div>
-                </div>
-              </div>
-            ))}
+          <h2 style={{ marginTop: 0, marginBottom: 12, flexShrink: 0, fontSize: 16 }}>Perfis de músicos</h2>
+          <div className="musicianProfilesScroll musicianProfilesScroll--flex">
+            {showfile.musicians.map((m) => {
+              const selected = selectedMusician?.id === m.id
+              return (
+                <MusicianProfileCard
+                  key={m.id}
+                  musician={m}
+                  selected={selected}
+                  onSelect={() => setSelectedMusicianId(m.id)}
+                  editName={editName[m.id] ?? m.name}
+                  editUsername={editUsername[m.id] ?? m.username}
+                  editPassword={editPassword[m.id] ?? ''}
+                  onEditNameChange={(v) =>
+                    setEditName((prev) => ({ ...prev, [m.id]: v }))
+                  }
+                  onEditUsernameChange={(v) =>
+                    setEditUsername((prev) => ({ ...prev, [m.id]: v }))
+                  }
+                  onEditPasswordChange={(v) =>
+                    setEditPassword((prev) => ({ ...prev, [m.id]: v }))
+                  }
+                  onSaveProfile={async () => {
+                    await api(`/api/admin/musicians/${m.id}`, {
+                      method: 'PATCH',
+                      token,
+                      body: JSON.stringify({
+                        name: editName[m.id] ?? m.name,
+                        username: editUsername[m.id] ?? m.username,
+                        password: editPassword[m.id] ?? '',
+                      }),
+                    })
+                    setEditPassword((prev) => ({ ...prev, [m.id]: '' }))
+                    onSaved()
+                  }}
+                  onMuteToggle={async (next) => {
+                    const updated = await api<MusicianStrip>(
+                      `/api/showfile/musician/${m.id}`,
+                      {
+                        method: 'PATCH',
+                        token,
+                        body: JSON.stringify({ mute: next }),
+                      },
+                    )
+                    onMusicianStripPatched?.(updated)
+                  }}
+                />
+              )
+            })}
           </div>
         </section>
 
-        <section style={{ ...ui.card, minWidth: 0, maxWidth: '100%', alignSelf: 'start' }}>
+        <section style={{ ...ui.card, minWidth: 0, maxWidth: '100%' }}>
           {selectedMusician ? (
             <MusicianControls
               token={token}
@@ -3748,6 +3815,617 @@ function MusicianTable({
           )}
         </section>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Card visualmente atrativo de um músico cadastrado:
+ * - Avatar circular com iniciais (cor derivada do username).
+ * - Indicador "EM USO" quando selecionado, com glow.
+ * - Status de mute como pill âmbar.
+ * - Edição (nome/usuário/senha) escondida em accordion.
+ */
+function MusicianProfileCard({
+  musician,
+  selected,
+  onSelect,
+  editName,
+  editUsername,
+  editPassword,
+  onEditNameChange,
+  onEditUsernameChange,
+  onEditPasswordChange,
+  onSaveProfile,
+  onMuteToggle,
+}: {
+  musician: { id: string; name: string; username: string; mute: boolean }
+  selected: boolean
+  onSelect: () => void
+  editName: string
+  editUsername: string
+  editPassword: string
+  onEditNameChange: (v: string) => void
+  onEditUsernameChange: (v: string) => void
+  onEditPasswordChange: (v: string) => void
+  onSaveProfile: () => Promise<void>
+  onMuteToggle: (next: boolean) => Promise<void>
+}) {
+  const [editOpen, setEditOpen] = useState(false)
+  const [savingMute, setSavingMute] = useState(false)
+  const [savingProfile, setSavingProfile] = useState(false)
+
+  // Cor "do músico": hash do username em paleta console.
+  const accent = useMemo(() => {
+    const palette = [
+      '#5cc8ff',
+      '#39ff14',
+      '#ffb020',
+      '#ff5252',
+      '#bf7af0',
+      '#41e0d4',
+      '#ff7ab8',
+      '#ff8a3d',
+    ]
+    let h = 0
+    for (let i = 0; i < musician.username.length; i++) {
+      h = (h * 31 + musician.username.charCodeAt(i)) >>> 0
+    }
+    return palette[h % palette.length]!
+  }, [musician.username])
+
+  const initials = useMemo(() => {
+    const parts = musician.name.trim().split(/\s+/).filter(Boolean)
+    if (parts.length === 0) return musician.username.slice(0, 2).toUpperCase()
+    if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase()
+    return (parts[0]![0]! + parts[parts.length - 1]![0]!).toUpperCase()
+  }, [musician.name, musician.username])
+
+  return (
+    <article
+      style={
+        {
+          position: 'relative',
+          borderRadius: 12,
+          padding: 12,
+          background: selected
+            ? `linear-gradient(180deg, ${accent}1c 0%, var(--console-bg-panel) 80%)`
+            : 'var(--console-bg-panel)',
+          border: `1px solid ${selected ? accent : 'var(--console-border)'}`,
+          boxShadow: selected
+            ? `0 0 0 1px ${accent}55, 0 8px 22px rgba(0,0,0,.35)`
+            : '0 4px 14px rgba(0,0,0,.25)',
+          transition: 'border-color 120ms ease, box-shadow 120ms ease, background 120ms ease',
+          ['--ch-accent' as string]: accent,
+        } as CSSProperties
+      }
+    >
+      {/* faixa colorida lateral (scribble strip) */}
+      <span
+        aria-hidden
+        style={{
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          bottom: 0,
+          width: 4,
+          background: accent,
+          borderTopLeftRadius: 12,
+          borderBottomLeftRadius: 12,
+          opacity: selected ? 1 : 0.55,
+          pointerEvents: 'none',
+        }}
+      />
+      <header
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          marginLeft: 6,
+          marginBottom: 10,
+        }}
+      >
+        <span
+          aria-hidden
+          style={{
+            width: 44,
+            height: 44,
+            borderRadius: 999,
+            background: `linear-gradient(180deg, ${accent} 0%, ${accent}88 100%)`,
+            color: '#06090f',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontWeight: 900,
+            fontSize: 15,
+            letterSpacing: '0.04em',
+            boxShadow: `0 0 0 1px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.4), 0 6px 12px rgba(0,0,0,.4)`,
+            flex: '0 0 44px',
+          }}
+        >
+          {initials}
+        </span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: 8,
+              flexWrap: 'wrap',
+            }}
+          >
+            <strong
+              style={{
+                fontSize: 14,
+                color: 'var(--console-text-hi)',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                maxWidth: 160,
+              }}
+              title={musician.name}
+            >
+              {musician.name}
+            </strong>
+            {selected ? (
+              <span
+                style={{
+                  fontFamily: 'var(--console-font-digit)',
+                  fontSize: 9,
+                  fontWeight: 900,
+                  letterSpacing: '0.16em',
+                  color: accent,
+                  border: `1px solid ${accent}`,
+                  borderRadius: 999,
+                  padding: '1px 6px',
+                  textShadow: `0 0 6px ${accent}66`,
+                }}
+              >
+                ATIVO
+              </span>
+            ) : null}
+          </div>
+          <div
+            style={{
+              color: 'var(--console-text-lo)',
+              fontFamily: 'var(--console-font-digit)',
+              fontSize: 11,
+              letterSpacing: '0.06em',
+              marginTop: 2,
+            }}
+          >
+            @{musician.username}
+          </div>
+        </div>
+        {musician.mute ? (
+          <span
+            style={{
+              fontFamily: 'var(--console-font-digit)',
+              fontSize: 9,
+              fontWeight: 900,
+              letterSpacing: '0.16em',
+              color: 'var(--console-led-red)',
+              border: '1px solid var(--console-led-red)',
+              background: 'rgba(255,59,59,0.14)',
+              borderRadius: 4,
+              padding: '2px 6px',
+            }}
+          >
+            MUTE
+          </span>
+        ) : null}
+      </header>
+
+      <div
+        style={{
+          display: 'flex',
+          gap: 8,
+          flexWrap: 'wrap',
+          marginLeft: 6,
+        }}
+      >
+        <button
+          type="button"
+          onClick={onSelect}
+          style={{
+            flex: 1,
+            minWidth: 130,
+            padding: '8px 12px',
+            borderRadius: 8,
+            border: `1px solid ${selected ? accent : 'var(--console-border-metal)'}`,
+            background: selected ? `${accent}22` : 'linear-gradient(180deg,#1b2431 0%,#101822 100%)',
+            color: selected ? accent : 'var(--console-text-hi)',
+            fontFamily: 'var(--console-font-digit)',
+            fontSize: 11,
+            fontWeight: 900,
+            letterSpacing: '0.14em',
+            cursor: 'pointer',
+            touchAction: 'manipulation',
+            userSelect: 'none',
+          }}
+        >
+          {selected ? '◉ MIX ABERTO' : '▶ ABRIR MIX'}
+        </button>
+        <button
+          type="button"
+          disabled={savingMute}
+          onClick={async () => {
+            setSavingMute(true)
+            try {
+              await onMuteToggle(!musician.mute)
+            } finally {
+              setSavingMute(false)
+            }
+          }}
+          aria-pressed={musician.mute}
+          title={musician.mute ? 'Tirar mute' : 'Mutar este músico'}
+          style={{
+            padding: '8px 10px',
+            borderRadius: 8,
+            border: `1px solid ${musician.mute ? 'var(--console-led-red)' : 'var(--console-border-metal)'}`,
+            background: musician.mute
+              ? 'rgba(255,59,59,0.18)'
+              : 'linear-gradient(180deg,#1b2431 0%,#101822 100%)',
+            color: musician.mute ? 'var(--console-led-red)' : 'var(--console-text-mid)',
+            fontFamily: 'var(--console-font-digit)',
+            fontSize: 11,
+            fontWeight: 900,
+            letterSpacing: '0.14em',
+            cursor: savingMute ? 'wait' : 'pointer',
+            touchAction: 'manipulation',
+          }}
+        >
+          MUTE
+        </button>
+        <button
+          type="button"
+          onClick={() => setEditOpen((v) => !v)}
+          aria-expanded={editOpen}
+          style={{
+            padding: '8px 10px',
+            borderRadius: 8,
+            border: '1px solid var(--console-border-metal)',
+            background: editOpen
+              ? 'rgba(78,163,255,0.14)'
+              : 'linear-gradient(180deg,#1b2431 0%,#101822 100%)',
+            color: editOpen ? 'var(--console-led-blue)' : 'var(--console-text-mid)',
+            fontFamily: 'var(--console-font-digit)',
+            fontSize: 11,
+            fontWeight: 900,
+            letterSpacing: '0.14em',
+            cursor: 'pointer',
+            touchAction: 'manipulation',
+          }}
+          title="Mostrar/ocultar edição do perfil"
+        >
+          {editOpen ? '▾ EDITAR' : '✎ EDITAR'}
+        </button>
+      </div>
+
+      {editOpen ? (
+        <div
+          style={{
+            marginTop: 10,
+            marginLeft: 6,
+            paddingTop: 10,
+            borderTop: '1px solid var(--console-border)',
+            display: 'grid',
+            gap: 8,
+          }}
+        >
+          <ProfileField
+            label="Nome"
+            value={editName}
+            onChange={onEditNameChange}
+          />
+          <ProfileField
+            label="Usuário"
+            value={editUsername}
+            onChange={onEditUsernameChange}
+          />
+          <ProfileField
+            label="Nova senha (opcional)"
+            value={editPassword}
+            onChange={onEditPasswordChange}
+            type="password"
+            placeholder="••••••"
+          />
+          <button
+            type="button"
+            disabled={savingProfile}
+            onClick={async () => {
+              setSavingProfile(true)
+              try {
+                await onSaveProfile()
+                setEditOpen(false)
+              } finally {
+                setSavingProfile(false)
+              }
+            }}
+            style={{
+              padding: '9px 14px',
+              borderRadius: 8,
+              border: `1px solid ${accent}`,
+              background: `${accent}22`,
+              color: accent,
+              fontFamily: 'var(--console-font-digit)',
+              fontSize: 11,
+              fontWeight: 900,
+              letterSpacing: '0.14em',
+              cursor: savingProfile ? 'wait' : 'pointer',
+              touchAction: 'manipulation',
+              alignSelf: 'flex-start',
+            }}
+          >
+            {savingProfile ? 'SALVANDO…' : '✓ SALVAR PERFIL'}
+          </button>
+        </div>
+      ) : null}
+    </article>
+  )
+}
+
+function ProfileField({
+  label,
+  value,
+  onChange,
+  type = 'text',
+  placeholder,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  type?: 'text' | 'password'
+  placeholder?: string
+}) {
+  return (
+    <label style={{ display: 'block' }}>
+      <span
+        style={{
+          display: 'block',
+          color: 'var(--console-text-lo)',
+          fontFamily: 'var(--console-font-digit)',
+          fontSize: 9,
+          fontWeight: 900,
+          letterSpacing: '0.16em',
+          marginBottom: 4,
+        }}
+      >
+        {label.toUpperCase()}
+      </span>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        style={{
+          width: '100%',
+          background: 'var(--console-bg-recess)',
+          border: '1px solid var(--console-border)',
+          color: 'var(--console-text-hi)',
+          borderRadius: 6,
+          padding: '8px 10px',
+          fontFamily: 'var(--console-font-digit)',
+          fontSize: 12,
+          letterSpacing: '0.04em',
+          outline: 'none',
+          boxSizing: 'border-box',
+        }}
+      />
+    </label>
+  )
+}
+
+/**
+ * Accordion compacto para um módulo do bus (Comp/Delay/Reverb).
+ * Visual de painel slim com LED de status + chevron.
+ */
+function FxBusAccordion({
+  label,
+  accent,
+  enabled,
+  onToggle,
+  children,
+}: {
+  label: string
+  accent: string
+  enabled: boolean
+  onToggle: (next: boolean) => void
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div
+      style={{
+        background: 'var(--console-bg-recess)',
+        border: '1px solid var(--console-border)',
+        borderRadius: 6,
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '8px 10px',
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            background: 'transparent',
+            border: 'none',
+            color: 'var(--console-text-mid)',
+            fontFamily: 'var(--console-font-digit)',
+            fontSize: 11,
+            fontWeight: 900,
+            letterSpacing: '0.18em',
+            cursor: 'pointer',
+            padding: 0,
+            flex: 1,
+            textAlign: 'left',
+            touchAction: 'manipulation',
+            userSelect: 'none',
+          }}
+          aria-expanded={open}
+        >
+          <span
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: 999,
+              background: enabled ? accent : '#1c2531',
+              boxShadow: enabled ? `0 0 6px ${accent}` : 'none',
+              flex: '0 0 7px',
+            }}
+          />
+          <span style={{ flex: 1 }}>{label}</span>
+          <span
+            style={{
+              color: 'var(--console-text-lo)',
+              fontSize: 14,
+              transform: open ? 'rotate(180deg)' : 'rotate(0)',
+              transition: 'transform 120ms ease',
+            }}
+          >
+            ▾
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggle(!enabled)
+          }}
+          aria-pressed={enabled}
+          title={enabled ? 'Desligar este módulo' : 'Ligar este módulo'}
+          style={{
+            padding: '4px 10px',
+            border: `1px solid ${enabled ? accent : 'var(--console-border)'}`,
+            background: enabled ? `${accent}22` : 'var(--console-bg-recess)',
+            color: enabled ? accent : 'var(--console-text-mid)',
+            borderRadius: 999,
+            fontFamily: 'var(--console-font-digit)',
+            fontSize: 11,
+            fontWeight: 900,
+            letterSpacing: '0.16em',
+            cursor: 'pointer',
+            touchAction: 'manipulation',
+          }}
+        >
+          ⏻
+        </button>
+      </div>
+      {open ? (
+        <div
+          style={{
+            padding: 10,
+            borderTop: '1px solid var(--console-border)',
+            background: 'var(--console-bg-panel)',
+          }}
+        >
+          {children}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function FxParamSlider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  unit,
+  accent,
+  displayFormat,
+  onChange,
+}: {
+  label: string
+  value: number
+  min: number
+  max: number
+  step: number
+  unit: string
+  accent: string
+  displayFormat?: (v: number) => string
+  onChange: (v: number) => void
+}) {
+  const [draft, setDraft] = useState(value)
+  const draftRef = useRef(value)
+  draftRef.current = draft
+  useEffect(() => setDraft(value), [value])
+  const fillPct = ((draft - min) / (max - min)) * 100
+  const display =
+    displayFormat?.(draft) ??
+    `${step < 1 ? draft.toFixed(1) : Math.round(draft)} ${unit}`
+  return (
+    <div
+      style={{
+        background: 'var(--console-bg-recess)',
+        border: '1px solid var(--console-border)',
+        borderRadius: 6,
+        padding: 8,
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          marginBottom: 4,
+        }}
+      >
+        <span
+          style={{
+            color: 'var(--console-text-lo)',
+            fontFamily: 'var(--console-font-digit)',
+            fontSize: 9,
+            fontWeight: 900,
+            letterSpacing: '0.14em',
+          }}
+        >
+          {label.toUpperCase()}
+        </span>
+        <span
+          style={{
+            color: accent,
+            fontFamily: 'var(--console-font-digit)',
+            fontSize: 10,
+            fontWeight: 800,
+            textShadow: `0 0 4px ${accent}66`,
+          }}
+        >
+          {display}
+        </span>
+      </div>
+      <input
+        type="range"
+        className="inearRange"
+        min={min}
+        max={max}
+        step={step}
+        value={draft}
+        onChange={(e) => {
+          const v = Number(e.target.value)
+          setDraft(v)
+        }}
+        onPointerUp={() => onChange(draftRef.current)}
+        onMouseUp={() => onChange(draftRef.current)}
+        onKeyUp={() => onChange(draftRef.current)}
+        style={
+          {
+            width: '100%',
+            ['--fill' as string]: `${fillPct}%`,
+            ['--ch-accent' as string]: accent,
+          } as CSSProperties
+        }
+      />
     </div>
   )
 }
@@ -3773,6 +4451,41 @@ function MusicianControls({
   const levelsByIndex = audioInputLevels?.levelsByIndex ?? {}
   const masterComp = (musician as MusicianStrip).masterComp as any
 
+  /** Canal cujo modal de FX está aberto (null = fechado). */
+  const [fxModalChannelId, setFxModalChannelId] = useState<string | null>(null)
+  const fxModalChannel = fxModalChannelId
+    ? showfile.channels.find((c) => c.id === fxModalChannelId) ?? null
+    : null
+  const fxModalAccent = fxModalChannel ? channelAccentColor(fxModalChannel) : '#39ff14'
+  const fxModalPeq = fxModalChannelId
+    ? ((musician as MusicianStrip).peqByChannel?.[fxModalChannelId] ?? null)
+    : null
+  const fxModalBypassed = fxModalChannelId
+    ? Boolean(musician.fxBypassByChannel?.[fxModalChannelId])
+    : false
+
+  const patchMusician = useCallback(
+    async (body: Record<string, unknown>) => {
+      const next = await api<MusicianStrip>(
+        `/api/showfile/musician/${musician.id}`,
+        {
+          method: 'PATCH',
+          token,
+          body: JSON.stringify(body),
+        },
+      )
+      onMusicianStripPatched?.(next)
+    },
+    [musician.id, onMusicianStripPatched, token],
+  )
+
+  const masterDelay = (musician as MusicianStrip).masterDelay as
+    | { enabled: boolean; timeMs: number; feedback: number; mix: number; outputDb: number }
+    | undefined
+  const masterReverb = (musician as MusicianStrip).masterReverb as
+    | { enabled: boolean; size: number; decayS: number; damping: number; mix: number; preDelayMs: number }
+    | undefined
+
   return (
     <div style={{ minWidth: 0, maxWidth: '100%' }}>
       <h2 style={{ marginTop: 0 }}>Olá, {musician.name}</h2>
@@ -3782,70 +4495,206 @@ function MusicianControls({
           recarrega esta página.
         </p>
       )}
-      <div style={{ marginTop: 12, padding: 12, borderRadius: 10, border: '1px solid #2d3748', background: '#0d1117' }}>
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
-          <strong style={{ color: '#c9d1d9' }}>Compressor master (por músico)</strong>
-          <label style={{ color: '#c9d1d9', display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input
-              type="checkbox"
-              checked={Boolean(masterComp?.enabled)}
-              onChange={async (e) => {
-                const next = await api<MusicianStrip>(
-                  `/api/showfile/musician/${musician.id}`,
-                  {
-                    method: 'PATCH',
-                    token,
-                    body: JSON.stringify({
-                      masterComp: { ...(masterComp || {}), enabled: e.target.checked },
-                    }),
-                  },
-                )
-                onMusicianStripPatched?.(next)
-              }}
-            />
-            ativo
-          </label>
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginTop: 10 }}>
-          {[
-            { k: 'thresholdDb', label: 'Threshold', min: -60, max: 0, step: 1, unit: 'dB' },
-            { k: 'ratio', label: 'Ratio', min: 1, max: 20, step: 0.5, unit: ':1' },
-            { k: 'attackMs', label: 'Attack', min: 0.2, max: 100, step: 0.2, unit: 'ms' },
-            { k: 'releaseMs', label: 'Release', min: 5, max: 800, step: 1, unit: 'ms' },
-            { k: 'kneeDb', label: 'Knee', min: 0, max: 18, step: 0.5, unit: 'dB' },
-            { k: 'makeupDb', label: 'Makeup', min: -12, max: 18, step: 0.5, unit: 'dB' },
-          ].map((p) => (
-            <div key={p.k} style={{ border: '1px solid #223045', borderRadius: 10, padding: 10, background: '#0b1220' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
-                <span style={{ color: '#8b949e', fontSize: 12 }}>{p.label}</span>
-                <span style={{ color: '#c9d1d9', fontSize: 12 }}>
-                  {Number(masterComp?.[p.k] ?? 0).toFixed(p.step < 1 ? 1 : 0)} {p.unit}
-                </span>
-              </div>
-              <input
-                type="range"
+      <div
+        style={{
+          marginTop: 12,
+          padding: 8,
+          borderRadius: 8,
+          border: '1px solid var(--console-border)',
+          background: 'var(--console-bg-panel)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 6,
+        }}
+      >
+        <FxBusAccordion
+          label="COMPRESSOR · MASTER"
+          enabled={Boolean(masterComp?.enabled)}
+          accent="#5cc8ff"
+          onToggle={(next) =>
+            void patchMusician({ masterComp: { ...(masterComp || {}), enabled: next } })
+          }
+        >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+              gap: 8,
+            }}
+          >
+            {[
+              { k: 'thresholdDb', label: 'Threshold', min: -60, max: 0, step: 1, unit: 'dB' },
+              { k: 'ratio', label: 'Ratio', min: 1, max: 20, step: 0.5, unit: ':1' },
+              { k: 'attackMs', label: 'Attack', min: 0.2, max: 100, step: 0.2, unit: 'ms' },
+              { k: 'releaseMs', label: 'Release', min: 5, max: 800, step: 1, unit: 'ms' },
+              { k: 'kneeDb', label: 'Knee', min: 0, max: 18, step: 0.5, unit: 'dB' },
+              { k: 'makeupDb', label: 'Makeup', min: -12, max: 18, step: 0.5, unit: 'dB' },
+            ].map((p) => (
+              <FxParamSlider
+                key={p.k}
+                label={p.label}
+                value={Number(masterComp?.[p.k as keyof typeof masterComp] ?? 0)}
                 min={p.min}
                 max={p.max}
                 step={p.step}
-                value={Number(masterComp?.[p.k] ?? 0)}
-                onChange={async (e) => {
-                  const next = await api<MusicianStrip>(
-                    `/api/showfile/musician/${musician.id}`,
-                    {
-                      method: 'PATCH',
-                      token,
-                      body: JSON.stringify({
-                        masterComp: { ...(masterComp || {}), [p.k]: Number(e.target.value) },
-                      }),
-                    },
-                  )
-                  onMusicianStripPatched?.(next)
-                }}
-                style={{ width: '100%', marginTop: 6 }}
+                unit={p.unit}
+                accent="#5cc8ff"
+                onChange={(v) =>
+                  void patchMusician({ masterComp: { ...(masterComp || {}), [p.k]: v } })
+                }
               />
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        </FxBusAccordion>
+
+        <FxBusAccordion
+          label="DELAY · MASTER"
+          enabled={Boolean(masterDelay?.enabled)}
+          accent="#bf7af0"
+          onToggle={(next) =>
+            void patchMusician({ masterDelay: { ...(masterDelay || {}), enabled: next } })
+          }
+        >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+              gap: 8,
+            }}
+          >
+            <FxParamSlider
+              label="Time"
+              value={Number(masterDelay?.timeMs ?? 220)}
+              min={5}
+              max={1500}
+              step={1}
+              unit="ms"
+              accent="#bf7af0"
+              onChange={(v) =>
+                void patchMusician({ masterDelay: { ...(masterDelay || {}), timeMs: v } })
+              }
+            />
+            <FxParamSlider
+              label="Feedback"
+              value={Number(masterDelay?.feedback ?? 0.3)}
+              min={0}
+              max={0.95}
+              step={0.01}
+              unit="%"
+              accent="#bf7af0"
+              displayFormat={(v) => `${Math.round(v * 100)}%`}
+              onChange={(v) =>
+                void patchMusician({ masterDelay: { ...(masterDelay || {}), feedback: v } })
+              }
+            />
+            <FxParamSlider
+              label="Mix"
+              value={Number(masterDelay?.mix ?? 0.25)}
+              min={0}
+              max={1}
+              step={0.01}
+              unit="%"
+              accent="#bf7af0"
+              displayFormat={(v) => `${Math.round(v * 100)}%`}
+              onChange={(v) =>
+                void patchMusician({ masterDelay: { ...(masterDelay || {}), mix: v } })
+              }
+            />
+            <FxParamSlider
+              label="Output"
+              value={Number(masterDelay?.outputDb ?? 0)}
+              min={-24}
+              max={6}
+              step={0.5}
+              unit="dB"
+              accent="#bf7af0"
+              onChange={(v) =>
+                void patchMusician({ masterDelay: { ...(masterDelay || {}), outputDb: v } })
+              }
+            />
+          </div>
+        </FxBusAccordion>
+
+        <FxBusAccordion
+          label="REVERB · MASTER"
+          enabled={Boolean(masterReverb?.enabled)}
+          accent="#41e0d4"
+          onToggle={(next) =>
+            void patchMusician({ masterReverb: { ...(masterReverb || {}), enabled: next } })
+          }
+        >
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+              gap: 8,
+            }}
+          >
+            <FxParamSlider
+              label="Size"
+              value={Number(masterReverb?.size ?? 0.5)}
+              min={0}
+              max={1}
+              step={0.01}
+              unit="%"
+              accent="#41e0d4"
+              displayFormat={(v) => `${Math.round(v * 100)}%`}
+              onChange={(v) =>
+                void patchMusician({ masterReverb: { ...(masterReverb || {}), size: v } })
+              }
+            />
+            <FxParamSlider
+              label="Decay"
+              value={Number(masterReverb?.decayS ?? 1.4)}
+              min={0.2}
+              max={6}
+              step={0.05}
+              unit="s"
+              accent="#41e0d4"
+              onChange={(v) =>
+                void patchMusician({ masterReverb: { ...(masterReverb || {}), decayS: v } })
+              }
+            />
+            <FxParamSlider
+              label="Damping"
+              value={Number(masterReverb?.damping ?? 0.45)}
+              min={0}
+              max={1}
+              step={0.01}
+              unit="%"
+              accent="#41e0d4"
+              displayFormat={(v) => `${Math.round(v * 100)}%`}
+              onChange={(v) =>
+                void patchMusician({ masterReverb: { ...(masterReverb || {}), damping: v } })
+              }
+            />
+            <FxParamSlider
+              label="Mix"
+              value={Number(masterReverb?.mix ?? 0.2)}
+              min={0}
+              max={1}
+              step={0.01}
+              unit="%"
+              accent="#41e0d4"
+              displayFormat={(v) => `${Math.round(v * 100)}%`}
+              onChange={(v) =>
+                void patchMusician({ masterReverb: { ...(masterReverb || {}), mix: v } })
+              }
+            />
+            <FxParamSlider
+              label="Pre-delay"
+              value={Number(masterReverb?.preDelayMs ?? 12)}
+              min={0}
+              max={200}
+              step={1}
+              unit="ms"
+              accent="#41e0d4"
+              onChange={(v) =>
+                void patchMusician({ masterReverb: { ...(masterReverb || {}), preDelayMs: v } })
+              }
+            />
+          </div>
+        </FxBusAccordion>
       </div>
       <div className="chBoardShell" style={{ marginTop: 12 }}>
       <div className="chBoard musicianDeskBoard">
@@ -3907,12 +4756,6 @@ function MusicianControls({
           if (!ch) return null
           const muted = musician.sendMutes?.[cid] === true
           const accent = channelAccentColor(ch)
-          const earEq = musician.eqByChannel?.[cid]
-          const eqBase = {
-            lowDb: earEq?.lowDb ?? ch.eq.lowDb,
-            midDb: earEq?.midDb ?? ch.eq.midDb,
-            highDb: earEq?.highDb ?? ch.eq.highDb,
-          }
           const peq = (musician as MusicianStrip).peqByChannel?.[cid] as any
           return (
             <div
@@ -3984,192 +4827,19 @@ function MusicianControls({
                     </span>
                   </div>
                 ) : (
-                  <div className="eqKnobCol">
-                    {(['highDb', 'midDb', 'lowDb'] as const).map((k) => (
-                      <div key={k} className="eqKnob">
-                        <div className="eqKnob__label">{eqBandLabel(k)}</div>
-                        <div className="eqKnob__dial" style={eqKnobStyle(eqBase[k], -12, 12)}>
-                          <input
-                            className="eqKnob__input"
-                            type="range"
-                            min={-12}
-                            max={12}
-                            step={0.5}
-                            value={eqBase[k]}
-                            onChange={async (e) => {
-                              const next = await api<MusicianStrip>(
-                                `/api/showfile/musician/${musician.id}`,
-                                {
-                                  method: 'PATCH',
-                                  token,
-                                  body: JSON.stringify({
-                                    eqByChannel: {
-                                      [cid]: {
-                                        ...eqBase,
-                                        [k]: Number(e.target.value),
-                                      },
-                                    },
-                                  }),
-                                },
-                              )
-                              onMusicianStripPatched?.(next)
-                            }}
-                          />
-                        </div>
-                        <div className="eqKnob__value">{eqBase[k].toFixed(1)} dB</div>
-                      </div>
-                    ))}
-                    <details style={{ marginTop: 10, width: '100%' }}>
-                      <summary style={{ cursor: 'pointer', color: '#79c0ff', fontSize: 12 }}>
-                        PEQ (6 bandas) · por músico
-                      </summary>
-                      <div style={{ marginTop: 10 }}>
-                        <label style={{ color: '#c9d1d9', display: 'flex', gap: 8, alignItems: 'center' }}>
-                          <input
-                            type="checkbox"
-                            checked={Boolean(peq?.enabled)}
-                            onChange={async (e) => {
-                              const nextPeq = { ...(peq || { bands: [] }), enabled: e.target.checked }
-                              const next = await api<MusicianStrip>(
-                                `/api/showfile/musician/${musician.id}`,
-                                {
-                                  method: 'PATCH',
-                                  token,
-                                  body: JSON.stringify({ peqByChannel: { [cid]: nextPeq } }),
-                                },
-                              )
-                              onMusicianStripPatched?.(next)
-                            }}
-                          />
-                          PEQ ativo
-                        </label>
-                        {(Array.isArray(peq?.bands) ? peq.bands : []).length === 0 ? (
-                          <button
-                            type="button"
-                            style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, border: '1px solid #2d3748', background: '#102a4a', color: '#c9d1d9', cursor: 'pointer' }}
-                            onClick={async () => {
-                              const nextPeq = {
-                                enabled: true,
-                                bands: [
-                                  { type: 'hpf', enabled: true, freqHz: 80, q: 0.707, gainDb: 0 },
-                                  { type: 'bell', enabled: true, freqHz: 250, q: 1.0, gainDb: 0 },
-                                  { type: 'bell', enabled: true, freqHz: 800, q: 1.0, gainDb: 0 },
-                                  { type: 'bell', enabled: true, freqHz: 2500, q: 1.0, gainDb: 0 },
-                                  { type: 'highshelf', enabled: true, freqHz: 9000, q: 0.707, gainDb: 0 },
-                                  { type: 'lpf', enabled: false, freqHz: 18000, q: 0.707, gainDb: 0 },
-                                ],
-                              }
-                              const next = await api<MusicianStrip>(
-                                `/api/showfile/musician/${musician.id}`,
-                                { method: 'PATCH', token, body: JSON.stringify({ peqByChannel: { [cid]: nextPeq } }) },
-                              )
-                              onMusicianStripPatched?.(next)
-                            }}
-                          >
-                            Criar PEQ padrão
-                          </button>
-                        ) : null}
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10, marginTop: 10 }}>
-                          {(Array.isArray(peq?.bands) ? peq.bands : []).slice(0, 6).map((b: any, bi: number) => (
-                            <div key={`${cid}-b-${bi}`} style={{ border: '1px solid #223045', borderRadius: 10, padding: 10, background: '#0b1220' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center' }}>
-                                <strong style={{ color: '#c9d1d9', fontSize: 12 }}>{String(b?.type || `b${bi + 1}`)}</strong>
-                                <label style={{ color: '#c9d1d9', display: 'flex', gap: 8, alignItems: 'center', fontSize: 12 }}>
-                                  <input
-                                    type="checkbox"
-                                    checked={Boolean(b?.enabled !== false)}
-                                    onChange={async (e) => {
-                                      const bands = (Array.isArray(peq?.bands) ? peq.bands : []).slice(0, 6)
-                                      const nextBands = bands.map((x: any, j: number) => (j === bi ? { ...x, enabled: e.target.checked } : x))
-                                      const nextPeq = { ...(peq || {}), enabled: Boolean(peq?.enabled), bands: nextBands }
-                                      const next = await api<MusicianStrip>(
-                                        `/api/showfile/musician/${musician.id}`,
-                                        { method: 'PATCH', token, body: JSON.stringify({ peqByChannel: { [cid]: nextPeq } }) },
-                                      )
-                                      onMusicianStripPatched?.(next)
-                                    }}
-                                  />
-                                  on
-                                </label>
-                              </div>
-                              <div style={{ marginTop: 8 }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#8b949e', fontSize: 11 }}>
-                                  <span>Freq</span>
-                                  <span>{Math.round(Number(b?.freqHz ?? 1000))} Hz</span>
-                                </div>
-                                <input
-                                  type="range"
-                                  min={20}
-                                  max={20000}
-                                  step={10}
-                                  value={Number(b?.freqHz ?? 1000)}
-                                  onChange={async (e) => {
-                                    const bands = (Array.isArray(peq?.bands) ? peq.bands : []).slice(0, 6)
-                                    const nextBands = bands.map((x: any, j: number) => (j === bi ? { ...x, freqHz: Number(e.target.value) } : x))
-                                    const nextPeq = { ...(peq || {}), enabled: Boolean(peq?.enabled), bands: nextBands }
-                                    const next = await api<MusicianStrip>(
-                                      `/api/showfile/musician/${musician.id}`,
-                                      { method: 'PATCH', token, body: JSON.stringify({ peqByChannel: { [cid]: nextPeq } }) },
-                                    )
-                                    onMusicianStripPatched?.(next)
-                                  }}
-                                  style={{ width: '100%', marginTop: 6 }}
-                                />
-                              </div>
-                              <div style={{ marginTop: 8 }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#8b949e', fontSize: 11 }}>
-                                  <span>Q</span>
-                                  <span>{Number(b?.q ?? 1).toFixed(2)}</span>
-                                </div>
-                                <input
-                                  type="range"
-                                  min={0.1}
-                                  max={12}
-                                  step={0.05}
-                                  value={Number(b?.q ?? 1)}
-                                  onChange={async (e) => {
-                                    const bands = (Array.isArray(peq?.bands) ? peq.bands : []).slice(0, 6)
-                                    const nextBands = bands.map((x: any, j: number) => (j === bi ? { ...x, q: Number(e.target.value) } : x))
-                                    const nextPeq = { ...(peq || {}), enabled: Boolean(peq?.enabled), bands: nextBands }
-                                    const next = await api<MusicianStrip>(
-                                      `/api/showfile/musician/${musician.id}`,
-                                      { method: 'PATCH', token, body: JSON.stringify({ peqByChannel: { [cid]: nextPeq } }) },
-                                    )
-                                    onMusicianStripPatched?.(next)
-                                  }}
-                                  style={{ width: '100%', marginTop: 6 }}
-                                />
-                              </div>
-                              <div style={{ marginTop: 8 }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#8b949e', fontSize: 11 }}>
-                                  <span>Gain</span>
-                                  <span>{Number(b?.gainDb ?? 0).toFixed(1)} dB</span>
-                                </div>
-                                <input
-                                  type="range"
-                                  min={-24}
-                                  max={24}
-                                  step={0.5}
-                                  value={Number(b?.gainDb ?? 0)}
-                                  onChange={async (e) => {
-                                    const bands = (Array.isArray(peq?.bands) ? peq.bands : []).slice(0, 6)
-                                    const nextBands = bands.map((x: any, j: number) => (j === bi ? { ...x, gainDb: Number(e.target.value) } : x))
-                                    const nextPeq = { ...(peq || {}), enabled: Boolean(peq?.enabled), bands: nextBands }
-                                    const next = await api<MusicianStrip>(
-                                      `/api/showfile/musician/${musician.id}`,
-                                      { method: 'PATCH', token, body: JSON.stringify({ peqByChannel: { [cid]: nextPeq } }) },
-                                    )
-                                    onMusicianStripPatched?.(next)
-                                  }}
-                                  style={{ width: '100%', marginTop: 6 }}
-                                />
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </details>
-                  </div>
+                  <FxButtonsCol
+                    accent={accent}
+                    bypassed={Boolean(musician.fxBypassByChannel?.[cid])}
+                    peqEnabled={Boolean(peq?.enabled && Array.isArray(peq?.bands) && peq.bands.length > 0)}
+                    onOpenFx={() => setFxModalChannelId(cid)}
+                    onToggleBypass={() =>
+                      void patchMusician({
+                        fxBypassByChannel: {
+                          [cid]: !musician.fxBypassByChannel?.[cid],
+                        },
+                      })
+                    }
+                  />
                 )}
               </div>
             </div>
@@ -4177,6 +4847,47 @@ function MusicianControls({
         })}
       </div>
       </div>
+      <FxModal
+        open={fxModalChannelId != null && fxModalChannel != null}
+        channelName={fxModalChannel?.name ?? ''}
+        channelId={fxModalChannelId ?? ''}
+        accent={fxModalAccent}
+        peq={fxModalPeq as { enabled?: boolean; bands?: PeqBandUi[] } | null}
+        comp={(masterComp as CompressorUi | undefined) ?? null}
+        bypassed={fxModalBypassed}
+        onClose={() => setFxModalChannelId(null)}
+        onPeqCommit={(next) => {
+          if (!fxModalChannelId) return
+          void patchMusician({ peqByChannel: { [fxModalChannelId]: next } })
+        }}
+        onPeqLive={(next) => {
+          if (!fxModalChannelId) return
+          void patchMusician({ peqByChannel: { [fxModalChannelId]: next } })
+        }}
+        onCompCommit={(next) => void patchMusician({ masterComp: next })}
+        onToggleBypass={(next) => {
+          if (!fxModalChannelId) return
+          void patchMusician({
+            fxBypassByChannel: { [fxModalChannelId]: next },
+          })
+        }}
+        onCreateDefaultPeq={() => {
+          if (!fxModalChannelId) return
+          const defaults: PeqBandUi[] = [
+            { type: 'hpf', enabled: true, freqHz: 80, q: 0.707, gainDb: 0 },
+            { type: 'bell', enabled: true, freqHz: 250, q: 1.0, gainDb: 0 },
+            { type: 'bell', enabled: true, freqHz: 800, q: 1.0, gainDb: 0 },
+            { type: 'bell', enabled: true, freqHz: 2500, q: 1.0, gainDb: 0 },
+            { type: 'highshelf', enabled: true, freqHz: 9000, q: 0.707, gainDb: 0 },
+            { type: 'lpf', enabled: false, freqHz: 18000, q: 0.707, gainDb: 0 },
+          ]
+          void patchMusician({
+            peqByChannel: {
+              [fxModalChannelId]: { enabled: true, bands: defaults },
+            },
+          })
+        }}
+      />
     </div>
   )
 }

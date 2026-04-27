@@ -1,4 +1,12 @@
-import type { ChannelStrip as ChannelStripData, Eq3, MusicianStrip, PeqSettings, Showfile } from '@inear/protocol'
+import type {
+  ChannelStrip as ChannelStripData,
+  CompressorSettings,
+  DelaySettings,
+  MusicianStrip,
+  PeqSettings,
+  ReverbSettings,
+  Showfile,
+} from '@inear/protocol'
 import {
   channelAccentColor,
   retornoMixerChannelOrder,
@@ -23,10 +31,14 @@ import type { RefObject } from 'react'
 import { RetornoFader } from './RetornoFader'
 import {
   ChannelStrip,
-  Knob,
+  FxModalMobile,
   LedButton,
   Meter,
   VerticalFader,
+  type CompressorUi,
+  type DelayUi,
+  type PeqBandUi,
+  type ReverbUi,
 } from './components'
 
 export function parseJwtSub(token: string): string {
@@ -107,19 +119,6 @@ export type AudioInputLevelsUi = {
   levelsByIndex: Record<string, number>
 }
 
-function effectiveEq(
-  ch: ChannelStripData,
-  musician: MusicianStrip,
-  cid: string,
-): Eq3 {
-  const ear = musician.eqByChannel?.[cid]
-  return {
-    lowDb: ear?.lowDb ?? ch.eq.lowDb,
-    midDb: ear?.midDb ?? ch.eq.midDb,
-    highDb: ear?.highDb ?? ch.eq.highDb,
-  }
-}
-
 function defaultPeqSettings(): PeqSettings {
   return {
     enabled: true,
@@ -169,7 +168,8 @@ export function RetornoMixerControls({
   const [mixerTab, setMixerTab] = useState<'channels' | 'groups' | 'overview'>(
     'channels',
   )
-  const [expandedFxId, setExpandedFxId] = useState<string | null>(null)
+  /** Canal cujo modal de FX está aberto. */
+  const [fxModalChannelId, setFxModalChannelId] = useState<string | null>(null)
   const [localSendMutes, setLocalSendMutes] = useState<Record<string, boolean>>({})
   const [bank, setBank] = useState(0)
   const channelsById = useMemo(() => {
@@ -285,28 +285,19 @@ export function RetornoMixerControls({
     [apiBase, musician, onLocalMixInteraction, onMusicianUpdated, token],
   )
 
-  const patchEqBand = useCallback(
-    async (
-      channelId: string,
-      band: keyof Eq3,
-      valueDb: number,
-    ) => {
+  const patchBypass = useCallback(
+    async (channelId: string, next: boolean) => {
       if (!musician) return
       const base = apiBase.trim().replace(/\/$/, '')
       try {
-        const r = await fetch(
-          `${base}/api/showfile/musician/${musician.id}`,
-          {
-            method: 'PATCH',
-            headers: {
-              Authorization: `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              eqByChannel: { [channelId]: { [band]: valueDb } },
-            }),
+        const r = await fetch(`${base}/api/showfile/musician/${musician.id}`, {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
           },
-        )
+          body: JSON.stringify({ fxBypassByChannel: { [channelId]: next } }),
+        })
         if (!r.ok) return
         const m = (await r.json()) as MusicianStrip
         onMusicianUpdated(m)
@@ -315,7 +306,44 @@ export function RetornoMixerControls({
         /* ignore */
       }
     },
-    [apiBase, token, musician, onLocalMixInteraction, onMusicianUpdated],
+    [apiBase, musician, onLocalMixInteraction, onMusicianUpdated, token],
+  )
+
+  const patchMusicianBus = useCallback(
+    async (body: Record<string, unknown>) => {
+      if (!musician) return
+      const base = apiBase.trim().replace(/\/$/, '')
+      try {
+        const r = await fetch(`${base}/api/showfile/musician/${musician.id}`, {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        })
+        if (!r.ok) return
+        const m = (await r.json()) as MusicianStrip
+        onMusicianUpdated(m)
+        onLocalMixInteraction?.()
+      } catch {
+        /* ignore */
+      }
+    },
+    [apiBase, musician, onLocalMixInteraction, onMusicianUpdated, token],
+  )
+
+  const patchMasterComp = useCallback(
+    (next: CompressorSettings) => void patchMusicianBus({ masterComp: next }),
+    [patchMusicianBus],
+  )
+  const patchMasterDelay = useCallback(
+    (next: DelaySettings) => void patchMusicianBus({ masterDelay: next }),
+    [patchMusicianBus],
+  )
+  const patchMasterReverb = useCallback(
+    (next: ReverbSettings) => void patchMusicianBus({ masterReverb: next }),
+    [patchMusicianBus],
   )
 
   const patchPeq = useCallback(
@@ -397,7 +425,16 @@ export function RetornoMixerControls({
           ? consolePalette.ledAmber
           : consolePalette.ledRed
 
-  const expandedChannel = expandedFxId ? channelsById.get(expandedFxId) ?? null : null
+  const fxModalChannel = fxModalChannelId
+    ? channelsById.get(fxModalChannelId) ?? null
+    : null
+  const fxModalAccent = fxModalChannel ? channelAccentColor(fxModalChannel) : consolePalette.ledGreen
+  const fxModalPeq = fxModalChannelId
+    ? (musician.peqByChannel?.[fxModalChannelId] ?? null)
+    : null
+  const fxModalBypassed = fxModalChannelId
+    ? Boolean(musician.fxBypassByChannel?.[fxModalChannelId])
+    : false
 
   return (
     <View style={s.wrap}>
@@ -478,7 +515,7 @@ export function RetornoMixerControls({
             const { primary, secondary } = stripTitles(ch)
             const globalIdx = bank * pageSize + idx
             const num = String(globalIdx + 1).padStart(2, '0')
-            const expanded = expandedFxId === cid
+            const expanded = fxModalChannelId === cid
             const pcm = pcmIndexFromChannel(ch)
             const lvl = pcm != null ? Math.max(0, Math.min(1, Number(levelsByIndex[String(pcm)]) || 0)) : 0
             return (
@@ -495,7 +532,7 @@ export function RetornoMixerControls({
                 onToggleMute={() => void patchSendMute(cid, !sendMuted)}
                 soloAvailable={false}
                 fxOn={expanded}
-                onToggleFx={() => setExpandedFxId((x) => (x === cid ? null : cid))}
+                onToggleFx={() => setFxModalChannelId(cid)}
                 pan={ch.pan}
                 inputLevel={lvl}
               />
@@ -596,19 +633,38 @@ export function RetornoMixerControls({
         </ScrollView>
       )}
 
-      {/* PAINEL FX EXPANDIDO */}
-      {expandedChannel && mixerTab === 'channels' ? (
-        <FxPanel
-          channel={expandedChannel}
-          eq={effectiveEq(expandedChannel, musician, expandedChannel.id)}
-          peq={(musician as MusicianStrip).peqByChannel?.[expandedChannel.id] ?? null}
-          accent={channelAccentColor(expandedChannel)}
-          onClose={() => setExpandedFxId(null)}
-          onEqBand={(band, v) => void patchEqBand(expandedChannel.id, band, v)}
-          onPeq={(p) => void patchPeq(expandedChannel.id, p)}
-          onCreateDefaultPeq={() => void patchPeq(expandedChannel.id, defaultPeqSettings())}
-        />
-      ) : null}
+      {/* MODAL DE FX (PEQ gráfico + Comp/Delay/Reverb em accordions + Bypass). */}
+      <FxModalMobile
+        visible={fxModalChannelId != null && fxModalChannel != null}
+        channelName={fxModalChannel?.name ?? ''}
+        channelId={fxModalChannelId ?? ''}
+        accent={fxModalAccent}
+        peq={fxModalPeq as { enabled?: boolean; bands?: PeqBandUi[] } | null}
+        comp={(musician.masterComp as CompressorUi | undefined) ?? null}
+        delay={(musician.masterDelay as DelayUi | undefined) ?? null}
+        reverb={(musician.masterReverb as ReverbUi | undefined) ?? null}
+        bypassed={fxModalBypassed}
+        onClose={() => setFxModalChannelId(null)}
+        onPeqCommit={(next) => {
+          if (!fxModalChannelId) return
+          void patchPeq(fxModalChannelId, next as PeqSettings)
+        }}
+        onPeqLive={(next) => {
+          if (!fxModalChannelId) return
+          void patchPeq(fxModalChannelId, next as PeqSettings)
+        }}
+        onCompCommit={(next) => patchMasterComp(next as CompressorSettings)}
+        onDelayCommit={(next) => patchMasterDelay(next as DelaySettings)}
+        onReverbCommit={(next) => patchMasterReverb(next as ReverbSettings)}
+        onToggleBypass={(next) => {
+          if (!fxModalChannelId) return
+          void patchBypass(fxModalChannelId, next)
+        }}
+        onCreateDefaultPeq={() => {
+          if (!fxModalChannelId) return
+          void patchPeq(fxModalChannelId, defaultPeqSettings())
+        }}
+      />
 
       {/* FAIXA DE MASTER */}
       <View style={s.masterBar}>
@@ -657,174 +713,6 @@ function SegBtn({
   )
 }
 
-function FxPanel({
-  channel,
-  eq,
-  peq,
-  accent,
-  onClose,
-  onEqBand,
-  onPeq,
-  onCreateDefaultPeq,
-}: {
-  channel: ChannelStripData
-  eq: Eq3
-  peq: PeqSettings | null
-  accent: string
-  onClose: () => void
-  onEqBand: (band: keyof Eq3, v: number) => void
-  onPeq: (p: PeqSettings) => void
-  onCreateDefaultPeq: () => void
-}) {
-  return (
-    <View style={[s.fxPanel, { borderColor: accent }]}>
-      <View style={s.fxHeader}>
-        <View style={[s.fxBar, { backgroundColor: accent }]} />
-        <Text style={s.fxTitle}>EQ · {channel.name}</Text>
-        <Pressable onPress={onClose} style={s.fxClose}>
-          <Text style={s.fxCloseTxt}>×</Text>
-        </Pressable>
-      </View>
-
-      {channel.lockEq ? (
-        <Text style={s.eqLocked}>EQ bloqueado pelo técnico</Text>
-      ) : (
-        <View style={s.fxBody}>
-          <View style={s.knobsRow}>
-            <Knob
-              value={eq.lowDb}
-              min={-12}
-              max={12}
-              center={0}
-              accent={accent}
-              label="LOW"
-              display={`${eq.lowDb > 0 ? '+' : ''}${eq.lowDb.toFixed(1)} dB`}
-              resetValue={0}
-              onCommit={(v) => onEqBand('lowDb', v)}
-            />
-            <Knob
-              value={eq.midDb}
-              min={-12}
-              max={12}
-              center={0}
-              accent={accent}
-              label="MID"
-              display={`${eq.midDb > 0 ? '+' : ''}${eq.midDb.toFixed(1)} dB`}
-              resetValue={0}
-              onCommit={(v) => onEqBand('midDb', v)}
-            />
-            <Knob
-              value={eq.highDb}
-              min={-12}
-              max={12}
-              center={0}
-              accent={accent}
-              label="HIGH"
-              display={`${eq.highDb > 0 ? '+' : ''}${eq.highDb.toFixed(1)} dB`}
-              resetValue={0}
-              onCommit={(v) => onEqBand('highDb', v)}
-            />
-          </View>
-
-          <View style={s.peqHeader}>
-            <Text style={s.peqHdr}>PEQ • 6 BANDAS</Text>
-            <LedButton
-              label={peq?.enabled ? 'ON' : 'OFF'}
-              color="green"
-              on={Boolean(peq?.enabled)}
-              onPress={() => {
-                const next = peq ? { ...peq, enabled: !peq.enabled } : defaultPeqSettings()
-                onPeq(next)
-              }}
-              width={48}
-            />
-          </View>
-
-          {!peq || !Array.isArray(peq.bands) || peq.bands.length === 0 ? (
-            <Pressable style={s.peqCreateBtn} onPress={onCreateDefaultPeq}>
-              <Text style={s.peqCreateTxt}>Criar PEQ padrão</Text>
-            </Pressable>
-          ) : (
-            <ScrollView horizontal showsHorizontalScrollIndicator nestedScrollEnabled>
-              <View style={s.peqBandsRow}>
-                {peq.bands.slice(0, 6).map((b, bi) => (
-                  <View key={`peq-${bi}`} style={s.peqBandCard}>
-                    <View style={s.peqBandTop}>
-                      <Text style={s.peqBandName}>
-                        {String(b.type).toUpperCase()}
-                      </Text>
-                      <LedButton
-                        label={b.enabled !== false ? 'ON' : 'OFF'}
-                        color="green"
-                        on={b.enabled !== false}
-                        width={36}
-                        onPress={() => {
-                          const bands = peq.bands.slice(0, 6).map((x, j) =>
-                            j === bi ? { ...x, enabled: !(x.enabled !== false) } : x,
-                          )
-                          onPeq({ ...peq, bands })
-                        }}
-                      />
-                    </View>
-                    <View style={s.peqKnobsRow}>
-                      <Knob
-                        value={b.freqHz}
-                        min={20}
-                        max={20000}
-                        accent={accent}
-                        size={36}
-                        label="FREQ"
-                        display={`${Math.round(b.freqHz)} Hz`}
-                        onCommit={(v) => {
-                          const bands = peq.bands.slice(0, 6).map((x, j) =>
-                            j === bi ? { ...x, freqHz: v } : x,
-                          )
-                          onPeq({ ...peq, bands })
-                        }}
-                      />
-                      <Knob
-                        value={b.q}
-                        min={0.1}
-                        max={12}
-                        accent={accent}
-                        size={36}
-                        label="Q"
-                        display={b.q.toFixed(2)}
-                        onCommit={(v) => {
-                          const bands = peq.bands.slice(0, 6).map((x, j) =>
-                            j === bi ? { ...x, q: v } : x,
-                          )
-                          onPeq({ ...peq, bands })
-                        }}
-                      />
-                      <Knob
-                        value={b.gainDb}
-                        min={-24}
-                        max={24}
-                        center={0}
-                        accent={accent}
-                        size={36}
-                        label="GAIN"
-                        display={`${b.gainDb > 0 ? '+' : ''}${b.gainDb.toFixed(1)}`}
-                        resetValue={0}
-                        onCommit={(v) => {
-                          const bands = peq.bands.slice(0, 6).map((x, j) =>
-                            j === bi ? { ...x, gainDb: v } : x,
-                          )
-                          onPeq({ ...peq, bands })
-                        }}
-                      />
-                    </View>
-                  </View>
-                ))}
-              </View>
-            </ScrollView>
-          )}
-        </View>
-      )}
-    </View>
-  )
-}
 
 const s = StyleSheet.create({
   wrap: {
@@ -1048,114 +936,6 @@ const s = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   rowActions: { flexDirection: 'row', marginTop: 8, gap: 8 },
-
-  fxPanel: {
-    marginTop: 8,
-    backgroundColor: consolePalette.bgPanel,
-    borderRadius: consoleRadius.panel,
-    borderWidth: 1,
-    padding: 10,
-  },
-  fxHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 10,
-  },
-  fxBar: { width: 6, height: 18, borderRadius: 2 },
-  fxTitle: {
-    flex: 1,
-    color: consolePalette.textHi,
-    fontFamily: consoleType.fontScribble,
-    fontSize: 13,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  fxClose: {
-    width: 26,
-    height: 26,
-    borderRadius: consoleRadius.led,
-    backgroundColor: consolePalette.bgRecess,
-    borderWidth: 1,
-    borderColor: consolePalette.border,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  fxCloseTxt: {
-    color: consolePalette.textHi,
-    fontSize: 18,
-    lineHeight: 18,
-    fontWeight: '900',
-  },
-  fxBody: { gap: 10 },
-  knobsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingVertical: 6,
-    backgroundColor: consolePalette.bgRecess,
-    borderRadius: consoleRadius.strip,
-    borderWidth: 1,
-    borderColor: consolePalette.border,
-  },
-  peqHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: 4,
-  },
-  peqHdr: {
-    color: consolePalette.textMid,
-    fontFamily: consoleType.fontDigit,
-    fontSize: 11,
-    fontWeight: '900',
-    letterSpacing: 1,
-  },
-  peqCreateBtn: {
-    paddingVertical: 10,
-    borderRadius: consoleRadius.strip,
-    borderWidth: 1,
-    borderColor: consolePalette.borderHi,
-    backgroundColor: consolePalette.ledBlueDim,
-    alignItems: 'center',
-  },
-  peqCreateTxt: {
-    color: consolePalette.textHi,
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  peqBandsRow: { flexDirection: 'row', gap: 6, paddingVertical: 4 },
-  peqBandCard: {
-    width: 142,
-    borderWidth: 1,
-    borderColor: consolePalette.border,
-    borderRadius: consoleRadius.strip,
-    padding: 8,
-    backgroundColor: consolePalette.bgRecess,
-  },
-  peqBandTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  peqBandName: {
-    color: consolePalette.textHi,
-    fontFamily: consoleType.fontDigit,
-    fontSize: 11,
-    fontWeight: '900',
-  },
-  peqKnobsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 4,
-  },
-
-  eqLocked: {
-    color: consolePalette.textMid,
-    fontSize: 11,
-    paddingVertical: 8,
-    textAlign: 'center',
-  },
 
   masterBar: {
     marginTop: 10,

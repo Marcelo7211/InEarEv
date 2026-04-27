@@ -115,16 +115,31 @@ function buildCurve(bands: PeqBandUi[], samples: number): number[] {
   return out
 }
 
-const FREQ_GRID_LABELS: { hz: number; label: string }[] = [
-  { hz: 30, label: '30' },
+/** Labels principais (major) — texto + tick longo. */
+const FREQ_GRID_MAJOR: { hz: number; label: string }[] = [
+  { hz: 20, label: '20' },
+  { hz: 50, label: '50' },
   { hz: 100, label: '100' },
-  { hz: 300, label: '300' },
+  { hz: 200, label: '200' },
+  { hz: 500, label: '500' },
   { hz: 1000, label: '1k' },
-  { hz: 3000, label: '3k' },
+  { hz: 2000, label: '2k' },
+  { hz: 5000, label: '5k' },
   { hz: 10000, label: '10k' },
+  { hz: 20000, label: '20k' },
 ]
 
-const PADDING = { top: 18, right: 18, bottom: 26, left: 32 }
+/** Linhas finas auxiliares (minor) — sem texto. */
+const FREQ_GRID_MINOR: number[] = [
+  30, 40, 60, 70, 80, 90,
+  150, 250, 300, 400,
+  600, 700, 800, 900,
+  1500, 2500, 3000, 4000,
+  6000, 7000, 8000, 9000,
+  12000, 15000,
+]
+
+const PADDING = { top: 18, right: 22, bottom: 32, left: 38 }
 const SAMPLES = 220
 
 /** Gerador de cor pastel a partir do índice — para diferenciar bandas quando o accent é igual. */
@@ -363,34 +378,8 @@ export function PeqGraph({
           strokeWidth={1}
           rx={4}
         />
-        {/* Grid de frequência (verticais). */}
-        {FREQ_GRID_LABELS.map((g) => {
-          const x = freqToPx(g.hz)
-          return (
-            <g key={g.label}>
-              <line
-                x1={x}
-                x2={x}
-                y1={PADDING.top}
-                y2={PADDING.top + innerH}
-                stroke="#11202d"
-                strokeWidth={1}
-              />
-              <text
-                x={x}
-                y={PADDING.top + innerH + 14}
-                fill="#5b6a82"
-                fontSize={9}
-                fontFamily="ui-monospace,SFMono-Regular,Menlo,monospace"
-                textAnchor="middle"
-              >
-                {g.label}
-              </text>
-            </g>
-          )
-        })}
-        {/* Linhas finas para 50, 200, 500, 2k, 5k, 20k (sem label). */}
-        {[50, 200, 500, 2000, 5000, 20000].map((f) => {
+        {/* Grid menor (linhas finas, sem label). */}
+        {FREQ_GRID_MINOR.map((f) => {
           const x = freqToPx(f)
           return (
             <line
@@ -404,6 +393,66 @@ export function PeqGraph({
             />
           )
         })}
+        {/* Grid maior — linha visível, tick e label Hz. */}
+        {FREQ_GRID_MAJOR.map((g) => {
+          const x = freqToPx(g.hz)
+          return (
+            <g key={g.label}>
+              <line
+                x1={x}
+                x2={x}
+                y1={PADDING.top}
+                y2={PADDING.top + innerH}
+                stroke="#1a2c40"
+                strokeWidth={1}
+              />
+              {/* Tick maior na borda inferior do gráfico. */}
+              <line
+                x1={x}
+                x2={x}
+                y1={PADDING.top + innerH}
+                y2={PADDING.top + innerH + 4}
+                stroke="#3a4a63"
+                strokeWidth={1.5}
+              />
+              <text
+                x={x}
+                y={PADDING.top + innerH + 16}
+                fill="#9caec6"
+                fontSize={10}
+                fontFamily="ui-monospace,SFMono-Regular,Menlo,monospace"
+                fontWeight={700}
+                textAnchor="middle"
+              >
+                {g.label}
+              </text>
+            </g>
+          )
+        })}
+        {/* Label "Hz" no canto inferior direito do eixo X. */}
+        <text
+          x={PADDING.left + innerW + 2}
+          y={PADDING.top + innerH + 16}
+          fill="#5b6a82"
+          fontSize={9}
+          fontFamily="ui-monospace,SFMono-Regular,Menlo,monospace"
+          fontWeight={800}
+          textAnchor="start"
+        >
+          Hz
+        </text>
+        {/* Label "dB" no canto superior do eixo Y. */}
+        <text
+          x={PADDING.left - 6}
+          y={PADDING.top - 4}
+          fill="#5b6a82"
+          fontSize={9}
+          fontFamily="ui-monospace,SFMono-Regular,Menlo,monospace"
+          fontWeight={800}
+          textAnchor="end"
+        >
+          dB
+        </text>
         {/* Grid de dB (horizontais). */}
         {dbTicks.map((dB) => {
           const y = dbToPx(dB)
@@ -452,14 +501,56 @@ export function PeqGraph({
             pointerEvents: 'none',
           }}
         />
-        {/* Pontos das bandas (numerados, arrastáveis). */}
+        {/* Pontos das bandas (numerados, arrastáveis) com badge de Hz. */}
         {draftBands.map((b, i) => {
           const off = b.enabled === false
           const cx = freqToPx(b.freqHz)
           const cy = dbToPx(b.gainDb)
           const tint = off ? '#3a4a63' : bandTint(accent, i)
+          const hzLabel =
+            b.freqHz >= 1000 ? `${(b.freqHz / 1000).toFixed(b.freqHz >= 10000 ? 0 : 1)}k` : `${Math.round(b.freqHz)}`
+          // Badge fica acima OU abaixo do ponto dependendo de onde a banda está (evita ir para fora).
+          const badgeAbove = cy > PADDING.top + 30
+          const badgeY = badgeAbove ? cy - 22 : cy + 28
           return (
             <g key={`band-${i}`}>
+              {/* Linha vertical de guia (do ponto até o eixo X). */}
+              <line
+                x1={cx}
+                x2={cx}
+                y1={cy}
+                y2={PADDING.top + innerH}
+                stroke={tint}
+                strokeOpacity={off ? 0.15 : 0.35}
+                strokeDasharray="2 3"
+                strokeWidth={1}
+                pointerEvents="none"
+              />
+              {/* Badge de Hz visível sempre. */}
+              <rect
+                x={cx - 18}
+                y={badgeY - 8}
+                width={36}
+                height={14}
+                rx={3}
+                fill="#040608"
+                stroke={tint}
+                strokeOpacity={0.6}
+                strokeWidth={1}
+                pointerEvents="none"
+              />
+              <text
+                x={cx}
+                y={badgeY + 2}
+                fill={tint}
+                fontWeight={800}
+                fontSize={9}
+                fontFamily="ui-monospace,SFMono-Regular,Menlo,monospace"
+                textAnchor="middle"
+                pointerEvents="none"
+              >
+                {hzLabel}Hz
+              </text>
               <circle
                 cx={cx}
                 cy={cy}
