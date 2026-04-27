@@ -1718,7 +1718,10 @@ export function AdminApp() {
             showfile={showfile}
             musician={selfMusician}
             audioInputLevels={audioInputLevels}
+            spectrumData={spectrumData}
+            showRta={showRta}
             onMusicianStripPatched={mergeMusicianStripIntoShowfile}
+            onToggleRta={setShowRta}
           />
         </>
       )}
@@ -3833,7 +3836,10 @@ function MusicianTable({
               showfile={showfile}
               musician={selectedMusician}
               audioInputLevels={audioInputLevels}
+              spectrumData={spectrumData}
+              showRta={showRta}
               onMusicianStripPatched={onMusicianStripPatched}
+              onToggleRta={setShowRta}
             />
           ) : (
             <p style={{ color: '#9aa0a6' }}>Nenhum músico cadastrado.</p>
@@ -4460,13 +4466,19 @@ function MusicianControls({
   showfile,
   musician,
   audioInputLevels,
+  spectrumData,
+  showRta,
   onMusicianStripPatched,
+  onToggleRta,
 }: {
   token: string
   showfile: Showfile
   musician: Showfile['musicians'][0]
   audioInputLevels: AudioInputLevelsResponse | null
+  spectrumData: any
+  showRta: boolean
   onMusicianStripPatched?: (m: MusicianStrip) => void
+  onToggleRta?: (next: boolean) => void
 }) {
   const ids = useMemo(
     () => retornoMixerChannelOrder(showfile, musician),
@@ -4488,8 +4500,6 @@ function MusicianControls({
   const fxModalBypassed = fxModalChannelId
     ? Boolean(musician.fxBypassByChannel?.[fxModalChannelId])
     : false
-  const rtaSpectrum = spectrumData
-  const rtaEnabled = showRta
 
   const patchMusician = useCallback(
     async (body: Record<string, unknown>) => {
@@ -4882,9 +4892,9 @@ function MusicianControls({
         peq={fxModalPeq as { enabled?: boolean; bands?: PeqBandUi[] } | null}
         comp={(masterComp as CompressorUi | undefined) ?? null}
         bypassed={fxModalBypassed}
-        spectrum={rtaSpectrum}
-        showRta={rtaEnabled}
-        onToggleRta={setShowRta}
+        spectrum={spectrumData}
+        showRta={showRta}
+        onToggleRta={onToggleRta}
         onClose={() => setFxModalChannelId(null)}
         onPeqCommit={(next) => {
           if (!fxModalChannelId) return
