@@ -74,11 +74,11 @@ export function RtaOverlay({
   // Fill área abaixo da curva
   const fillPath = useMemo(() => {
     if (!spectrumPath) return ''
-    const baseY = dbToPx(0)
+    const baseY = dbToPx(-gainRangeDb)
     const lastX = xToPx(1)
     const firstX = xToPx(0)
     return `${spectrumPath} L ${lastX.toFixed(1)} ${baseY.toFixed(1)} L ${firstX.toFixed(1)} ${baseY.toFixed(1)} Z`
-  }, [spectrumPath])
+  }, [spectrumPath, gainRangeDb])
 
   // Cores com transparência
   const rtaColor = enabled ? accent : '#5b6a82'
