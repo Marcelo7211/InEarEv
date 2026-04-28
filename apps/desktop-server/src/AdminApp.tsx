@@ -16,6 +16,7 @@ import {
   channelAccentColor,
   MVP_MAX_CAPTURE_CHANNELS,
   retornoMixerChannelOrder,
+  channelIconBadge,
 } from '@inear/protocol'
 import { type PeqBandUi } from './components/PeqGraph'
 import { type SpectrumData } from './components/RtaOverlay'
